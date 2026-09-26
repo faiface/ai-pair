@@ -6,7 +6,7 @@ import type {
   Anchor,
   BatchResult,
   Candidate,
-  CursorInfo,
+  Code,
   ErrorKind,
   Event,
   Excerpt,
@@ -17,7 +17,7 @@ import type {
   TypeText,
 } from "@ai-pair/protocol"
 import * as nodePath from "node:path"
-import { actionKinds, moveProblem, ToolError } from "@ai-pair/protocol"
+import { actionKinds, CURSOR_MARKER, moveProblem, ToolError } from "@ai-pair/protocol"
 import { resolveSpan, resolveSpot, type Resolution } from "./anchors"
 import { fileDiff } from "./diff"
 import type { AgentState, Change, CursorView, EditorPort, PanelPort, Ref, SharedSelection } from "./ports"
@@ -90,6 +90,9 @@ type Session = {
   ended: boolean
   navigatorReady: boolean
   navigatorTimer?: ReturnType<typeof setTimeout>
+  playing?: Playing
+  /** The cursor's line as the agent last saw it in a report, so reports only show it when it changed. */
+  seenCursor?: string
 }
 
 type Call = {
@@ -101,13 +104,26 @@ type Call = {
   reject: (error: unknown) => void
 }
 
-/** `consumed`: the action took effect, so it counts as played and isn't returned as unplayed. */
+/**
+ * `consumed`: the action took effect, so it counts as played and isn't returned as unplayed.
+ * `rest`: the action took effect in part; this is what's left of it.
+ */
 type Outcome =
   | { kind: "ok" }
-  | { kind: "interrupted"; typed?: string; consumed?: boolean }
+  | { kind: "interrupted"; rest?: Action; consumed?: boolean }
   | { kind: "error"; error: ErrorKind; message: string; candidates?: Candidate[]; consumed?: boolean }
 
-type Playing = { touched: Set<string>; runs: RunResult[]; index: number }
+/** The batch being played: what it touched, for saving and for its report's code. */
+type Playing = {
+  touched: Set<string>
+  runs: RunResult[]
+  /** The text its edits changed, tracked through later edits. */
+  span?: { file: string; start: number; end: number }
+  moved: boolean
+}
+
+/** A report's code longer than this skips lines in the middle. */
+const MAX_CODE_LINES = 40
 
 const ok: Outcome = { kind: "ok" }
 
@@ -177,6 +193,9 @@ export class Controller {
   step(actions: Action[], signal?: AbortSignal): Promise<Report> {
     return this.serialize(signal, () => {
       const s = this.requireSession()
+      // An empty batch only waits for the queued ones, so it isn't a batch of its own.
+      if (actions.length === 0) return this.block("step", {}, signal)
+      this.checkOneFile(s, actions)
       const batch: Batch = { id: this.nextBatchId++, actions, state: "queued" }
       if (s.stale || s.ended) {
         this.discard(s, batch)
@@ -388,6 +407,34 @@ export class Controller {
     return run
   }
 
+  /** A batch edits one file: it names at most one (in `move` or `point`), and only before its first edit. */
+  private checkOneFile(s: Session, actions: Action[]): void {
+    let named: string | undefined
+    let edited = false
+    for (const action of actions) {
+      // A malformed action fails when it plays, with its own error.
+      if (typeof action !== "object" || action === null || actionKinds(action).length !== 1) continue
+      if ("type" in action || "type_fast" in action || "delete" in action) edited = true
+      const target: unknown = "move" in action ? action.move : "point" in action ? action.point : undefined
+      const file = typeof target === "object" && target !== null && "file" in target ? target.file : undefined
+      if (typeof file !== "string") continue
+      const path = this.resolvePath(s, file)
+      if (named !== undefined && path !== named) {
+        throw new ToolError(
+          "invalid_arguments",
+          `A batch works in one file, but this one names ${this.displayPath(s, named)} and ${this.displayPath(s, path)}. Start a new batch where it switches files.`,
+        )
+      }
+      if (named === undefined && edited) {
+        throw new ToolError(
+          "invalid_arguments",
+          "A batch works in one file: name it (in `move` or `point`) before the batch's first edit. Start a new batch where it switches files.",
+        )
+      }
+      named = path
+    }
+  }
+
   private requireSession(): Session {
     if (!this.session) {
       throw new ToolError("no_session", "No pairing session is active. Call `start` to begin one.")
@@ -430,7 +477,8 @@ export class Controller {
     if (s.queue[0]?.state === "playing" && s.timeline.isInterrupted) return false
     switch (call.kind) {
       case "step":
-        return call.batch!.state === "done" || s.queue[0] === call.batch
+        if (!call.batch) return s.queue.length === 0
+        return call.batch.state === "done" || s.queue[0] === call.batch
       case "end":
         return s.queue.length === 0
       case "listen":
@@ -466,10 +514,23 @@ export class Controller {
       }
     }
     this.render()
-    void this.cursorInfo(s).then(
-      (cursor) => call.resolve(cursor ? { ...report, cursor } : report),
-      () => call.resolve(report),
-    )
+    void this.withCursor(s, report).then(call.resolve, () => call.resolve(report))
+  }
+
+  /** Adds the cursor's line to the report, unless it's where the agent last saw it, in a report's code or cursor. */
+  private async withCursor(s: Session, report: Report): Promise<Report> {
+    for (const b of report.batches) {
+      const line = b.code?.lines.find((l) => l.text.includes(CURSOR_MARKER))
+      if (b.code && line) s.seenCursor = `${b.code.file}:${line.number}:${line.text}`
+    }
+    if (!s.cursor) return report
+    const cursor = await this.code(s, { touched: new Set(), runs: [], moved: true })
+    const line = cursor?.lines[0]
+    if (!cursor || !line) return report
+    const key = `${cursor.file}:${line.number}:${line.text}`
+    if (key === s.seenCursor) return report
+    s.seenCursor = key
+    return { ...report, cursor }
   }
 
   private snapshot(s: Session, call: Call, waiting: boolean): Report {
@@ -498,22 +559,40 @@ export class Controller {
     s.navigatorReady = false
 
     const report: Report = { batches, events, turn: s.turn }
-    if (call.batch) {
-      const b = call.batch
-      report.submitted = { id: b.id, status: b.state === "done" ? b.result!.status : b.state }
-    }
+    const b = call.batch
+    if (b && b.state !== "done") report.submitted = { id: b.id, status: b.state }
     if (waiting) report.waiting = true
     return report
   }
 
-  private async cursorInfo(s: Session): Promise<CursorInfo | undefined> {
-    if (!s.cursor) return undefined
-    const text = await this.editor.getText(s.cursor.file)
-    const info: CursorInfo = { file: this.displayPath(s, s.cursor.file), ...position(text, s.cursor.offset) }
-    if (s.selection) {
-      info.selection = { from: position(text, s.selection.start), to: position(text, s.selection.end) }
+  /** The lines the batch changed, extended to the cursor's line, with the cursor marked. */
+  private async code(s: Session, p: Playing): Promise<Code | undefined> {
+    const file = p.span?.file ?? (p.moved ? s.cursor?.file : undefined)
+    if (!file) return undefined
+    const text = await this.editor.getText(file)
+    const lines = splitLines(text)
+    const at = s.cursor?.file === file ? position(text, s.cursor.offset) : undefined
+    let from = at?.line ?? Infinity
+    let to = at?.line ?? -Infinity
+    if (p.span) {
+      // Text ending with a newline changed the lines up to it, not the one after.
+      const end = p.span.end > p.span.start && isLineStart(text, p.span.end) ? p.span.end - 1 : p.span.end
+      from = Math.min(from, position(text, p.span.start).line)
+      to = Math.max(to, position(text, end).line)
     }
-    return info
+    const numbers: number[] = []
+    for (let n = from; n <= to; n++) {
+      const long = to - from + 1 > MAX_CODE_LINES
+      if (!long || n < from + MAX_CODE_LINES / 2 || n > to - MAX_CODE_LINES / 2 || n === at?.line) numbers.push(n)
+    }
+    return {
+      file: this.displayPath(s, file),
+      lines: numbers.map((n) => {
+        const line = lines[n - 1] ?? ""
+        if (n !== at?.line) return { number: n, text: line }
+        return { number: n, text: line.slice(0, at.column - 1) + CURSOR_MARKER + line.slice(at.column - 1) }
+      }),
+    }
   }
 
   private close(s: Session): void {
@@ -528,7 +607,7 @@ export class Controller {
 
   private discard(s: Session, batch: Batch): void {
     batch.state = "done"
-    batch.result = { id: batch.id, status: "discarded", played: 0, unplayed: batch.actions }
+    batch.result = { id: batch.id, status: "discarded", unplayed: batch.actions }
     s.finished.push(batch.result)
   }
 
@@ -559,9 +638,19 @@ export class Controller {
         if (!batch) break
         this.startHead(s)
         this.render()
-        const playing: Playing = { touched: new Set(), runs: [], index: 0 }
+        const playing: Playing = { touched: new Set(), runs: [], moved: false }
+        s.playing = playing
         const result = await this.play(s, batch, playing)
+        s.playing = undefined
         if (playing.runs.length > 0) result.runs = playing.runs
+        if (result.status !== "discarded") {
+          try {
+            const code = await this.code(s, playing)
+            if (code) result.code = code
+          } catch {
+            // The file is gone; the report just can't show it.
+          }
+        }
         for (const file of playing.touched) {
           try {
             await this.editor.save(file)
@@ -594,46 +683,35 @@ export class Controller {
   private async play(s: Session, batch: Batch, playing: Playing): Promise<BatchResult> {
     const { id, actions } = batch
     for (let i = 0; i < actions.length; i++) {
-      if (s.timeline.isInterrupted) return this.interruptedResult(batch, i)
-      playing.index = i
+      if (s.timeline.isInterrupted) return this.stopped(batch, actions.slice(i), i > 0)
       let outcome: Outcome
       try {
         outcome = await this.perform(s, actions[i]!, playing)
       } catch (e) {
         outcome = fail("invalid_action", e instanceof Error ? e.message : String(e))
       }
+      const rest = actions.slice(i + 1)
       if (outcome.kind === "interrupted") {
-        if (outcome.consumed) return this.interruptedResult(batch, i + 1, undefined, true)
-        return this.interruptedResult(batch, i, outcome.typed)
+        if (outcome.consumed) return this.stopped(batch, rest, true)
+        if (outcome.rest) return this.stopped(batch, [outcome.rest, ...rest], true)
+        return this.stopped(batch, actions.slice(i), i > 0)
       }
       if (outcome.kind === "error") {
-        const played = outcome.consumed ? i + 1 : i
-        const result: BatchResult = {
-          id,
-          status: "failed",
-          played,
-          error: { index: i, kind: outcome.error, message: outcome.message, candidates: outcome.candidates },
-        }
-        if (played < actions.length) result.unplayed = actions.slice(played)
+        const result: BatchResult = { id, status: "failed", error: { kind: outcome.error, message: outcome.message } }
+        if (outcome.candidates) result.error!.candidates = outcome.candidates
+        const unplayed = outcome.consumed ? rest : actions.slice(i)
+        if (unplayed.length > 0) result.unplayed = unplayed
         return result
       }
     }
-    return { id, status: "completed", played: actions.length }
+    return { id, status: "completed" }
   }
 
-  /** `effect`: the action before `index` already took effect, so the batch counts as interrupted. */
-  private interruptedResult(batch: Batch, index: number, typed?: string, effect = false): BatchResult {
-    const { id, actions } = batch
-    if (effect) {
-      const result: BatchResult = { id, status: "interrupted", played: index }
-      if (index < actions.length) result.unplayed = actions.slice(index)
-      return result
-    }
-    if (typed) {
-      return { id, status: "interrupted", played: index, partial: { index, typed }, unplayed: actions.slice(index + 1) }
-    }
-    if (index === 0) return { id, status: "discarded", played: 0, unplayed: actions }
-    return { id, status: "interrupted", played: index, unplayed: actions.slice(index) }
+  /** An interrupted batch. With no visible effect yet, it counts as discarded. */
+  private stopped(batch: Batch, unplayed: Action[], effect: boolean): BatchResult {
+    const result: BatchResult = { id: batch.id, status: effect ? "interrupted" : "discarded" }
+    if (unplayed.length > 0) result.unplayed = unplayed
+    return result
   }
 
   private delay(s: Session, ms: number): Promise<boolean> {
@@ -641,7 +719,6 @@ export class Controller {
   }
 
   private async perform(s: Session, action: Action, playing: Playing): Promise<Outcome> {
-    const { touched } = playing
     const kinds = actionKinds(action)
     if (kinds.length > 1) {
       return fail("invalid_action", `One action per object, got ${kinds.map((k) => `\`${k}\``).join(" and ")}: make them separate actions, in order.`)
@@ -692,6 +769,7 @@ export class Controller {
         Math.abs(position(text, s.cursor.offset).line - position(text, offset).line) <= t.nearLines
       s.cursor = { file, offset }
       s.selection = null
+      playing.moved = true
       this.render()
       // The pause is after the move, so the programmer sees where the cursor went before anything happens there.
       await this.delay(s, near ? t.afterMoveNearMs : t.afterMoveFarMs)
@@ -706,6 +784,7 @@ export class Controller {
       if (!r.ok) return failed(r)
       s.selection = r.range
       s.cursor.offset = r.range.end
+      playing.moved = true
       this.render()
       await this.delay(s, this.config.timing.afterSelectMs)
       return ok
@@ -717,7 +796,7 @@ export class Controller {
       if (!Array.isArray(parts) || parts.length !== 2 || !parts.every((p) => typeof p === "string")) {
         return fail("invalid_action", "Give the text to type as two parts, `[before, after]`: the cursor ends between them.")
       }
-      return this.type(s, parts as TypeText, fast, touched)
+      return this.type(s, parts as TypeText, fast, playing)
     }
 
     if ("delete" in action) {
@@ -728,7 +807,7 @@ export class Controller {
       this.clearPoint(s)
       s.cursor.offset = start
       s.selection = null
-      touched.add(file)
+      this.touch(playing, file, start, end - start, 0)
       await this.editor.edit(file, start, end - start, "", { undoStopBefore: true, undoStopAfter: true })
       this.render()
       await this.delay(s, this.config.timing.afterDeleteMs)
@@ -807,7 +886,7 @@ export class Controller {
       return { kind: "interrupted" }
     }
 
-    const result: RunResult = { index: playing.index, command, output: outcome.output }
+    const result: RunResult = { command, output: outcome.output }
     if (outcome.exitCode !== undefined && !outcome.running) result.exit_code = outcome.exitCode
     if (outcome.truncated) result.truncated = true
     if (outcome.running) result.running = true
@@ -824,7 +903,7 @@ export class Controller {
   }
 
   /** Types `before`, then `after`, then steps back to between them. */
-  private async type(s: Session, [before, after]: TypeText, fast: boolean, touched: Set<string>): Promise<Outcome> {
+  private async type(s: Session, [before, after]: TypeText, fast: boolean, playing: Playing): Promise<Outcome> {
     if (!s.cursor) return fail("no_file", "The agent cursor isn't in a file yet; `move` first.")
     const cursor = s.cursor
     await this.editor.show(cursor.file)
@@ -841,14 +920,19 @@ export class Controller {
     let typed = ""
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i]!
-      if (!(await this.delay(s, chunk.delay))) return { kind: "interrupted", typed }
+      if (!(await this.delay(s, chunk.delay))) {
+        if (typed === "") return { kind: "interrupted" }
+        const rest: TypeText =
+          typed.length <= before.length ? [before.slice(typed.length), after] : ["", after.slice(typed.length - before.length)]
+        return { kind: "interrupted", rest: fast ? { type_fast: rest } : { type: rest } }
+      }
       const insert = eol === "\n" ? chunk.text : chunk.text.replaceAll("\n", eol)
       const start = s.selection ? s.selection.start : cursor.offset
       const deleteLength = s.selection ? s.selection.end - s.selection.start : 0
       // Move the cursor before awaiting, so programmer edits arriving meanwhile transform the right position.
       cursor.offset = start + insert.length
       s.selection = null
-      touched.add(cursor.file)
+      this.touch(playing, cursor.file, start, deleteLength, insert.length)
       await this.editor.edit(cursor.file, start, deleteLength, insert, {
         undoStopBefore: i === 0,
         undoStopAfter: i === chunks.length - 1,
@@ -882,6 +966,22 @@ export class Controller {
       s.selection = { start: map(s.selection.start), end: map(s.selection.end) }
     }
     if (s.point?.file === file) s.point = { file, start: map(s.point.start), end: map(s.point.end) }
+    const span = s.playing?.span
+    if (span?.file === file) s.playing!.span = { file, start: map(span.start), end: map(span.end) }
+  }
+
+  /** Records an edit of the batch: the file to save, and the text it changed for the report. */
+  private touch(p: Playing, file: string, start: number, removed: number, inserted: number): void {
+    p.touched.add(file)
+    const map = (pos: number): number => {
+      if (pos <= start) return pos
+      if (pos >= start + removed) return pos + inserted - removed
+      return start + inserted
+    }
+    const span = p.span?.file === file ? p.span : undefined
+    p.span = span
+      ? { file, start: Math.min(map(span.start), start), end: Math.max(map(span.end), start + inserted) }
+      : { file, start, end: start + inserted }
   }
 
   // ---- Shared selections ---------------------------------------------------

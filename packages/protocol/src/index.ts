@@ -76,7 +76,6 @@ export type ErrorKind =
 export type Candidate = { line: number; context: string }
 
 export type RunResult = {
-  index: number
   command: string
   /** Absent when the command is still running, or its exit code couldn't be observed. */
   exit_code?: number
@@ -88,13 +87,27 @@ export type RunResult = {
   shell?: string
 }
 
+/** Marks the agent cursor in a report's code. Anchors ignore it, so code can be copied from a report as is. */
+export const CURSOR_MARKER = "▌"
+
+/** Lines of a file as they read, with the agent cursor marked. Long code skips lines in the middle. */
+export type Code = {
+  file: string
+  lines: { number: number; text: string }[]
+}
+
 export type BatchResult = {
   id: number
   status: BatchStatus
-  played: number
-  partial?: { index: number; typed: string }
+  /** The code the batch produced, as it read when the batch ended; also just the cursor's line after a move. */
+  code?: Code
+  /** The error of a failed batch, about the first action in `unplayed`. */
+  error?: { kind: ErrorKind; message: string; candidates?: Candidate[] }
+  /**
+   * The actions that didn't play, verbatim, ready to resubmit. An interrupted `type` comes first, reduced to
+   * what it didn't type; a failed batch's failing action comes first.
+   */
   unplayed?: Action[]
-  error?: { index: number; kind: ErrorKind; message?: string; candidates?: Candidate[] }
   runs?: RunResult[]
 }
 
@@ -116,19 +129,14 @@ export type Event =
   | { kind: "turn"; to: Turn; message?: string; selection?: Excerpt }
   | { kind: "end" }
 
-export type CursorInfo = {
-  file: string
-  line: number
-  column: number
-  selection?: { from: { line: number; column: number }; to: { line: number; column: number } }
-}
-
 export type Report = {
   batches: BatchResult[]
-  submitted?: { id: number; status: "queued" | "playing" | BatchStatus }
+  /** The batch this `step` submitted, unless it's already finished and in `batches`. */
+  submitted?: { id: number; status: "queued" | "playing" }
   events: Event[]
   turn: Turn
-  cursor?: CursorInfo
+  /** The agent cursor's line, when it isn't where the agent last saw it: in this report's code, or an earlier report. */
+  cursor?: Code
   waiting?: true
 }
 

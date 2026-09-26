@@ -113,15 +113,16 @@ Rules:
   immediately and the call returns right away.
 - **Nothing is lost.** Unplayed actions of `interrupted`, `failed`, and
   `discarded` batches are returned verbatim, so the agent can resubmit them
-  unchanged, modify them, or drop them.
+  unchanged, modify them, or drop them. An action cut off partway through
+  comes back reduced to what it didn't do yet.
 - **Anchors resolve at play time.** Anchors in a batch are resolved when the
   action plays, not when the batch is submitted. A batch may therefore refer to
   text that an earlier, still-queued batch is going to type. (The agent's own
   typing is deterministic; only the programmer can break that prediction, and
   that is an interrupting event, covered by the rules above.)
 - **Timeouts.** Any blocking call returns after at most `MAX_BLOCK` (*tunable*,
-  ~45 s, safely below common MCP client timeouts) even if nothing has finished, with
-  `"waiting": true`. Nothing is lost: the agent simply carries on as if the
+  ~45 s, safely below common MCP client timeouts) even if nothing has finished,
+  saying so. Nothing is lost: the agent simply carries on as if the
   call had returned normally, submitting its next batch with `step`, or
   calling `listen` if it has nothing more. This covers long playbacks and
   paused playback.
@@ -161,6 +162,15 @@ the closing message in the narration panel. Returns the final report.
 
 Submits a batch. Blocks as described in [Timing model](#timing-model).
 
+**A batch works in one file.** It may name a file (in `move` or `point`) only
+before its first edit, and all the files it names must be the same one. So
+every batch edits exactly one file, and its report shows one piece of code. A
+batch that breaks this is rejected when it's submitted, as an error of the
+call: nothing is queued.
+
+An empty batch isn't a batch: `step([])` waits for the queued batches to
+finish, without waiting for the programmer, and reports them.
+
 ### `listen() -> Report`
 
 Collects the reports of all queued batches, then waits for the programmer.
@@ -173,20 +183,13 @@ Returns when:
 
 `listen` is how the agent "ends its turn" without actually ending it.
 
-### `read(file: string, from_line?: number, to_line?: number) -> FileContent`
+### `read(file: string, from_line?: number, to_line?: number) -> text`
 
 Returns the contents of a file **as it is in the editor buffer**, including
 unsaved changes and everything played so far (but not text still queued for
-playback). Falls back to disk for files that aren't open. Output includes line
-numbers. Does not block and does not deliver events.
-
-```ts
-type FileContent = {
-  file: string
-  dirty: boolean          // buffer has unsaved changes
-  lines: { number: number, text: string }[]
-}
-```
+playback). Falls back to disk for files that aren't open. The result is the
+file's name, whether it has unsaved changes, and its lines, numbered. Does not
+block and does not deliver events.
 
 ## Actions
 
@@ -306,13 +309,13 @@ commands can still run in the background with the agent's native tools.
   seconds (default 120, at most 600). A command still going after that, such
   as a server or a watcher, is reported with `running: true` and keeps
   running in its terminal.
-- **Result.** Each `run` adds an entry to the batch's `runs`: the exit code,
-  the last ~12,000 characters of output as plain text, and the terminal's
-  shell (`pwsh`, `zsh`, …) so the agent can write commands for it.
+- **Result.** The batch's report shows each `run`: the exit code, the last
+  ~12,000 characters of output as plain text, and the terminal's shell
+  (`pwsh`, `zsh`, …) so the agent can write commands for it.
 - **Failure.** A nonzero exit fails the batch with `command_failed`, since the
   rest of the batch, and the next one, were planned assuming success. A `run`
-  counts as played once its command has started, so it is never returned in
-  `unplayed`; the same holds when the programmer interrupts while it runs:
+  counts as played once its command has started, so it is never returned as
+  unplayed; the same holds when the programmer interrupts while it runs:
   playback stops waiting, and the command keeps running.
 - The output needs shell integration in the terminal. Without it, the command
   is typed into the terminal and the entry says the output wasn't captured.
@@ -354,38 +357,86 @@ still selects the right match.
 
 ## Reports
 
+A report is **text**, written for the agent to read: code appears as numbered
+lines, not as JSON strings full of escapes. It says, in order:
+
+1. **What the programmer did** since the last report: the [events](#events).
+2. **Each batch that finished** since the last report, in order: its id and
+   status, and
+   - **its code**: the lines it changed, as they read when it ended, from the
+     first changed line to the last, extended to the cursor's line, with the
+     agent cursor marked `▌`. A batch that only moved shows the cursor's line;
+     one that only said something shows no code. Long code skips lines in the
+     middle. This is how the agent checks that the batch did what it meant,
+     in the place it meant, even when it `completed`.
+   - the commands it ran, with their exit code and output,
+   - for a failed batch, the error, with candidates for an ambiguous anchor,
+   - **what didn't play**, verbatim, one action per line, ready to resubmit.
+     An interrupted action comes first, reduced to what it didn't do yet; a
+     failed batch's failing action comes first.
+3. **The batch this `step` submitted**, if it hasn't finished: playing or
+   queued.
+4. **The agent cursor**, only when it isn't where the agent last saw it in a
+   report, e.g. because the programmer's edits moved it.
+5. Whether the call returned because `MAX_BLOCK` elapsed, whether it's the
+   programmer's turn, and whether the session has ended.
+
+For example, a batch interrupted by a message, and the batch queued behind it:
+
+```
+The programmer said:
+> use zod for validation
+
+Batch 6 interrupted, in src/server.ts:
+13    const title = req.body.title;
+14    res.sta▌
+Not played:
+  {"type":["tus(",")"]}
+  {"type":["201",""]}
+
+Batch 7 discarded.
+Not played:
+  {"say":"Now the GET route."}
+```
+
+**Anchors ignore the cursor marker**, so text can be copied from a report's
+code as it is.
+
+**What counts as played.** A `say` counts once it's shown, even if its
+reading pause is cut short. A `move` or `select` counts once the cursor has
+moved. A `run` counts once its command has started. A batch interrupted
+before any of its actions had a visible effect is reported as `discarded`.
+
+**A cut-off `type`** leaves what it typed in the buffer, and comes back
+reduced to the rest: cut in `before`, it's the rest of `before`, then `after`,
+which finishes it exactly. Cut in `after`, it's `["", rest of after]`, which
+restores the text but leaves the cursor as many characters past the inside of
+the pair as `after` had typed; the code shows where the cursor is.
+
+Internally, the editor produces a structured report, which the relay renders:
+
 ```ts
 type Report = {
-  batches: BatchResult[]      // batches that finished since the last report, in order
-  submitted?: {               // the batch submitted by this call (step only)
-    id: number
-    status: "queued" | "playing" | BatchStatus  // if finished, its result is in `batches`
-  }
-  events: Event[]             // programmer events since the last report, in order
+  batches: BatchResult[]      // finished since the last report, in order
+  submitted?: { id: number, status: "queued" | "playing" }  // step only, while unfinished
+  events: Event[]             // since the last report, in order
   turn: "agent" | "user"
-  cursor?: { file: string, line: number, column: number, selection?: Range }  // absent before the first move
-  waiting?: true              // returned due to MAX_BLOCK; carry on as usual
+  cursor?: Code               // only when it isn't where the agent last saw it
+  waiting?: true              // returned due to MAX_BLOCK
 }
 
 type BatchResult = {
   id: number
   status: "completed" | "interrupted" | "failed" | "discarded"
-  played: number              // number of fully played actions
-  partial?: {                 // the action that was playing when stopped
-    index: number
-    typed: string             // for type/type_fast: exactly what made it into the buffer
-  }
-  unplayed?: Action[]         // remaining actions, verbatim (the partial one excluded,
-                              // the failing one included, a started `run` excluded)
-  error?: {
-    index: number
+  code?: Code
+  error?: {                   // for a command's failure, about its `run`; else the first unplayed action
     kind: "anchor_not_found" | "anchor_ambiguous" | "no_selection" | "no_file"
         | "not_your_turn" | "invalid_action" | "command_failed" | "command_declined"
     message: string
     candidates?: { line: number, context: string }[]
   }
+  unplayed?: Action[]
   runs?: {                    // one per `run` that started
-    index: number
     command: string
     exit_code?: number        // absent while running, or if it couldn't be observed
     output: string            // plain text, the tail if long
@@ -394,14 +445,12 @@ type BatchResult = {
     shell?: string
   }[]
 }
+
+type Code = {                 // the cursor marked with ▌ in its line
+  file: string
+  lines: { number: number, text: string }[]
+}
 ```
-
-A batch interrupted before any of its actions had a visible effect is reported
-as `discarded`.
-
-A partially typed action stays in the buffer: if the programmer interrupts
-mid-word, the half word remains, and `partial.typed` says exactly what was
-typed.
 
 ## Events
 
@@ -487,37 +536,48 @@ experience (order of work, narration, background vs. visible work) is in
 
 ### Normal flow
 
-```jsonc
-// → step
+```
+→ step
 [{ "say": "Let's add the POST handler. Signature first." },
  { "move": { "file": "src/server.ts", "before": "app.use(express.json());", "after": "\n" } },
  { "type": ["\n\napp.post('/todos', async (req, res) => {\n", "\n});"] }]
-// ← returns immediately
-{ "batches": [], "submitted": { "id": 1, "status": "playing" }, "events": [], "turn": "agent", ... }
+← returns immediately
+Batch 1 is playing.
 
-// → step (blocks until batch 1 finishes)
+→ step (blocks until batch 1 finishes)
 [{ "say": "We need a title from the body." },
  { "type": ["  const title = req.body.title;", ""] }]
-// ←
-{ "batches": [{ "id": 1, "status": "completed", "played": 3 }],
-  "submitted": { "id": 2, "status": "playing" }, "events": [], ... }
+←
+Batch 1 completed, in src/server.ts:
+4  app.use(express.json());
+5
+6  app.post('/todos', async (req, res) => {
+7  ▌
+8  });
+
+Batch 2 is playing.
 ```
 
 ### Interrupt mid-typing
 
-```jsonc
-// Batch 2 is playing; the agent has already submitted batch 3 and is blocked.
-// The programmer replies in the narration panel: "use zod for validation".
-// ← step returns immediately
-{ "batches": [
-    { "id": 2, "status": "interrupted", "played": 1,
-      "partial": { "index": 1, "typed": "  const ti" } },
-    { "id": 3, "status": "discarded", "played": 0,
-      "unplayed": [{ "say": "..." }, { "type": ["...", ""] }] }
-  ],
-  "events": [{ "kind": "message", "text": "use zod for validation" }], ... }
+```
+Batch 2 is playing; the agent has already submitted batch 3 and is blocked.
+The programmer replies in the narration panel: "use zod for validation".
+← step returns immediately
+The programmer said:
+> use zod for validation
 
-// → step
+Batch 2 interrupted, in src/server.ts:
+7    const ti▌
+Not played:
+  {"type":["tle = req.body.title;",""]}
+
+Batch 3 discarded.
+Not played:
+  {"say":"..."}
+  {"type":["...",""]}
+
+→ step
 [{ "select": { "text": "  const ti" } },
  { "say": "Good call. Let me define a schema instead." },
  { "delete": true }, ...]
@@ -525,31 +585,39 @@ experience (order of work, narration, background vs. visible work) is in
 
 ### Ambiguous anchor
 
-```jsonc
-// ← report
-{ "batches": [{ "id": 7, "status": "failed", "played": 1,
-    "error": { "index": 1, "kind": "anchor_ambiguous",
-      "candidates": [{ "line": 12, "context": "  return res.json(todos);" },
-                     { "line": 31, "context": "  return res.json(todo);" }] },
-    "unplayed": [...] }], ... }
+```
+← report
+Batch 7 failed, in src/server.ts:
+18  ▌
+anchor_ambiguous: 2 matches for "  return res.json("; make it longer to be unique, or add near_line
+  line 12: return res.json(todos);
+  line 31: return res.json(todo);
+Not played, starting with the one that failed:
+  {"move":{"before":"  return res.json(","after":""}}
+  ...
 ```
 
 ### Turn handoff
 
-```jsonc
-// Programmer presses "My turn".
-// ← { "events": [{ "kind": "turn", "to": "user" }], "turn": "user", ... }
-// → listen
-// ... programmer writes a loop, pauses typing ...
-// ← { "events": [{ "kind": "edit", "file": "src/server.ts", "diff": "..." }], "turn": "user" }
-// → step
+```
+Programmer presses "My turn".
+← The programmer took the turn.
+
+  It's the programmer's turn: you're the navigator. ...
+→ listen
+... programmer writes a loop, pauses typing ...
+← The programmer edited src/server.ts:
+  @@ -20,2 +20,4 @@
+  ...
+→ step
 [{ "point": { "text": "for (let i = 0; i <= todos.length; i++)" } },
  { "say": "Careful: `<=` will go one past the end." }]
-// → listen
-// ... programmer fixes it, presses "Your turn" ...
-// ← { "events": [{ "kind": "edit", ... },
-//               { "kind": "turn", "to": "agent", "message": "ok, finish the handler" }],
-//     "turn": "agent" }
+→ listen
+... programmer fixes it, presses "Your turn" ...
+← The programmer edited src/server.ts:
+  ...
+  The programmer handed the turn back to you:
+  > ok, finish the handler
 ```
 
 ## Open questions

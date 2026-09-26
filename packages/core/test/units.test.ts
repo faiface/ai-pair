@@ -76,6 +76,11 @@ describe("anchors", () => {
     expect(resolveSpot(text, { before: " = ", after: "1", near_line: 2 })).toEqual({ ok: true, range: { start: 10, end: 10 } })
   })
 
+  it("ignores the cursor marker, so code can be copied from a report", () => {
+    expect(resolveAnchor(text, { text: "b =▌ 1" })).toEqual({ ok: true, range: { start: 6, end: 11 } })
+    expect(resolveSpot(text, { before: "b = ▌", after: "1" })).toEqual({ ok: true, range: { start: 10, end: 10 } })
+  })
+
   it("resolves a from/to span, to the first match of `to` after `from`", () => {
     expect(resolveSpan(text, { from: { text: "b" }, to: { text: "1" } })).toEqual({ ok: true, range: { start: 6, end: 11 } })
     expect(resolveSpan(text, { from: { text: "c" }, to: { text: "b" } })).toMatchObject({ ok: false, kind: "anchor_not_found" })

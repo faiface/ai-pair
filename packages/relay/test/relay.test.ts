@@ -79,20 +79,23 @@ describe("relay", () => {
     const client = await connect()
     const started = await call(client, "start", { task: "test" })
     expect(started.error).toBe(false)
-    expect(JSON.parse(started.text)).toEqual({ batches: [], events: [], turn: "agent" })
+    expect(started.text).toMatch(/started/)
     expect(started.content[1]!.text).toContain("THE GUIDE")
 
-    const first = JSON.parse((await call(client, "step", { actions: [{ move: { file: "a.ts" } }, { type: ["hi", ""] }] })).text)
-    expect(first.submitted).toEqual({ id: 1, status: "playing" })
-    const second = JSON.parse((await call(client, "step", { actions: [] })).text)
-    expect(second.batches).toEqual([{ id: 1, status: "completed", played: 2 }])
+    const first = await call(client, "step", { actions: [{ move: { file: "a.ts" } }, { type: ["hi", ""] }] })
+    expect(first.text).toMatch(/Batch 1 is playing/)
+    const second = await call(client, "step", { actions: [] })
+    // Reports are text for the agent to read: check what they say, not how they're laid out.
+    expect(second.text).toMatch(/Batch 1 completed/)
+    expect(second.text).toMatch(/1 +hi▌/)
     expect(editor.text("src/a.ts")).toBe("hi")
 
-    const read = JSON.parse((await call(client, "read", { file: "a.ts" })).text)
-    expect(read).toEqual({ file: "a.ts", dirty: false, lines: [{ number: 1, text: "hi" }] })
+    const read = await call(client, "read", { file: "a.ts" })
+    expect(read.text).toMatch(/a\.ts/)
+    expect(read.text).toMatch(/1 +hi/)
 
     const ended = await call(client, "end", { summary: "Done." })
-    expect(ended.error).toBe(false)
+    expect(ended.text).toMatch(/ended/)
     expect(panel.events).toContainEqual({ type: "session", active: false, reason: "agent", summary: "Done." })
     expect((await call(client, "listen")).text).toMatch(/^no_session:/)
   })
@@ -135,9 +138,9 @@ describe("relay", () => {
     expect(await listening).toBeInstanceOf(Error)
 
     controller.userMessage("hello")
-    const report = JSON.parse((await call(client, "listen")).text)
-    expect(report.batches).toEqual([{ id: 1, status: "completed", played: 1 }])
-    expect(report.events).toEqual([{ kind: "message", text: "hello" }])
+    const report = await call(client, "listen")
+    expect(report.text).toMatch(/hello/)
+    expect(report.text).toMatch(/Batch 1 completed/)
   })
 
   it("ends the session when the agent's harness goes away", async () => {

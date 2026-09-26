@@ -67,7 +67,7 @@ export async function run(): Promise<void> {
   assert.equal(await buffer("ai-pair-demo/src/server.ts"), EXPECTED_SERVER)
   assert.equal(await disk("ai-pair-demo/src/server.ts"), EXPECTED_SERVER, "saved after each batch")
 
-  // A programmer edit mid-typing interrupts, and the report says exactly what was typed.
+  // A programmer edit mid-typing interrupts, and the report shows exactly what was typed.
   const c = api.controller
   c.setSpeed(1)
   const alphabet = "abcdefghijklmnopqrstuvwxyz"
@@ -84,12 +84,15 @@ export async function run(): Promise<void> {
   const report = await pending
   const [typing, next] = report.batches
   assert.equal(typing?.status, "interrupted")
-  const typed = typing.partial?.typed ?? ""
-  assert.ok(typed.length > 0 && alphabet.startsWith(typed), `typed: ${JSON.stringify(typed)}`)
+  // What's left of the cut `type` comes back first, ready to resubmit.
+  const rest = typing.unplayed?.[0]
+  const left = rest && "type" in rest ? rest.type[0] : ""
+  const typed = alphabet.slice(0, alphabet.length - left.length)
+  assert.ok(typed.length > 0 && left.length > 0 && alphabet.endsWith(left), `left: ${JSON.stringify(left)}`)
   assert.equal(next?.status, "discarded")
   assert.equal(report.events[0]?.kind, "edit")
   assert.equal(doc.getText(), "// mine\n" + typed)
-  assert.deepEqual(report.cursor, { file: "scratch.ts", line: 2, column: typed.length + 1 })
+  assert.deepEqual(typing.code, { file: "scratch.ts", lines: [{ number: 2, text: typed + "▌" }] })
   await c.end()
   console.log(`interrupted after typing ${JSON.stringify(typed)}`)
 
@@ -108,13 +111,13 @@ export async function run(): Promise<void> {
     const result = await agent.callTool({ name, arguments: args })
     const content = result.content as { type: string; text: string }[]
     assert.ok(!result.isError, content[0]?.text ?? "tool error")
-    return JSON.parse(content[0]!.text)
+    return content[0]!.text
   }
   c.setSpeed(20)
   await tool("start", { task: "relay test" })
   await tool("step", { actions: [{ say: "Hello from the relay." }, { move: { file: "relay.txt" } }, { type: ["typed via the relay", ""] }] })
   const last = await tool("step", { actions: [] })
-  assert.equal(last.batches[0]?.status, "completed")
+  assert.match(last, /Batch \d+ completed/)
   assert.equal(await buffer("relay.txt"), "typed via the relay")
   await tool("end", { summary: "Bye." })
   await agent.close()

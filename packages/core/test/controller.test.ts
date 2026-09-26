@@ -28,7 +28,7 @@ describe("timing", () => {
     expect(editor.text("a.ts")).toBe("ab")
 
     const report = await until(secondCall)
-    expect(report.batches).toEqual([{ id: 1, status: "completed", played: 2 }])
+    expect(report.batches).toEqual([{ id: 1, status: "completed", code: { file: "a.ts", lines: [{ number: 1, text: "abc▌" }] } }])
     expect(report.submitted).toEqual({ id: 2, status: "playing" })
 
     await advance(200)
@@ -41,7 +41,7 @@ describe("timing", () => {
     await controller.step([{ move: { file: "a.ts" } }])
     const report = await until(controller.listen())
     expect(report.waiting).toBe(true)
-    expect(report.batches).toEqual([{ id: 1, status: "completed", played: 1 }])
+    expect(report.batches).toMatchObject([{ id: 1, status: "completed" }])
   })
 
   it("holds playback while paused and continues on resume", async () => {
@@ -125,7 +125,7 @@ describe("editing", () => {
     await controller.step([{ move: { file: "a.ts" } }, { type: ["update(", ")"] }, { type: ["ctx, dt", ""] }])
     const report = await until(controller.step([]))
     expect(editor.text("a.ts")).toBe("update(ctx, dt)")
-    expect(report.cursor).toMatchObject({ line: 1, column: 15 })
+    expect(report.batches[0]!.code).toEqual({ file: "a.ts", lines: [{ number: 1, text: "update(ctx, dt▌)" }] })
     const pair = editor.edits.slice(0, "update()".length)
     expect(pair.map((e) => e.text).join("")).toBe("update()")
     expect(pair.map((e) => [e.options.undoStopBefore, e.options.undoStopAfter])).toEqual([
@@ -192,7 +192,8 @@ describe("editing", () => {
     const report = await until(controller.step([]))
     expect(report.batches[0]).toMatchObject({
       status: "failed",
-      error: { index: 1, kind: "invalid_action", message: expect.stringContaining("both `before` and `after`") },
+      error: { kind: "invalid_action", message: expect.stringContaining("both `before` and `after`") },
+      unplayed: [{ move: { before: "x" } }],
     })
   })
 
@@ -223,10 +224,9 @@ describe("editing", () => {
       {
         id: 1,
         status: "failed",
-        played: 1,
+        code: { file: "a.ts", lines: [{ number: 1, text: "▌x" }] },
         unplayed: [{ move: { before: "x", after: "" } }],
         error: {
-          index: 1,
           kind: "anchor_ambiguous",
           message: expect.any(String),
           candidates: [
@@ -235,7 +235,7 @@ describe("editing", () => {
           ],
         },
       },
-      { id: 2, status: "discarded", played: 0, unplayed: [{ type: ["y", ""] }] },
+      { id: 2, status: "discarded", unplayed: [{ type: ["y", ""] }] },
     ])
   })
 
@@ -246,15 +246,93 @@ describe("editing", () => {
     const report = await until(controller.step([]))
     expect(report.batches[0]).toMatchObject({
       status: "failed",
-      played: 0,
-      error: { index: 0, kind: "invalid_action", message: expect.stringContaining("`move` and `type`") },
+      error: { kind: "invalid_action", message: expect.stringContaining("`move` and `type`") },
     })
     expect(editor.text("a.ts")).toBe("x\n")
   })
 })
 
+describe("reports", () => {
+  it("shows the lines a batch changed, extended to the cursor, as they read when it ended", async () => {
+    const { controller } = setup({ "a.ts": "a\nb\nc\n" })
+    await controller.start()
+    await controller.step([
+      { move: { file: "a.ts", before: "a", after: "\n" } },
+      { type: ["\n  x", ""] },
+      { move: { before: "c", after: "\n" } },
+    ])
+    const report = await until(controller.step([]))
+    expect(report.batches[0]!.code).toEqual({
+      file: "a.ts",
+      lines: [
+        { number: 1, text: "a" },
+        { number: 2, text: "  x" },
+        { number: 3, text: "b" },
+        { number: 4, text: "c▌" },
+      ],
+    })
+    // The code shows the cursor, so the report doesn't repeat it.
+    expect(report.cursor).toBeUndefined()
+  })
+
+  it("skips the middle of long code, keeping the cursor's line", async () => {
+    const { controller } = setup({ "a.ts": "" })
+    await controller.start()
+    const body = Array.from({ length: 60 }, (_, i) => `line ${i + 1}`).join("\n")
+    await controller.step([{ move: { file: "a.ts" } }, { type_fast: [body, ""] }])
+    const report = await until(controller.step([]))
+    const numbers = report.batches[0]!.code!.lines.map((l) => l.number)
+    expect(numbers.length).toBeLessThanOrEqual(41)
+    expect(numbers[0]).toBe(1)
+    expect(report.batches[0]!.code!.lines.at(-1)).toEqual({ number: 60, text: "line 60▌" })
+  })
+
+  it("shows the cursor only when it isn't where the agent last saw it", async () => {
+    const { editor, controller } = setup({ "a.ts": "abc\n" })
+    await controller.start()
+    await until(controller.step([{ move: { file: "a.ts", before: "ab", after: "c" } }]))
+    const report = await until(controller.step([{ say: "Hm." }]))
+    expect(report.batches[0]!.code).toEqual({ file: "a.ts", lines: [{ number: 1, text: "ab▌c" }] })
+    expect(report.cursor).toBeUndefined()
+    const next = await until(controller.step([]))
+    expect(next.cursor).toBeUndefined()
+
+    editor.userEdit("a.ts", 0, 0, "\n")
+    const moved = await until(controller.listen())
+    expect(moved.cursor).toEqual({ file: "a.ts", lines: [{ number: 2, text: "ab▌c" }] })
+  })
+
+  it("returns what's left of a type cut inside its second part", async () => {
+    const { editor, controller } = setup({ "a.ts": "" })
+    await controller.start()
+    await controller.step([{ move: { file: "a.ts" } }, { type: ["f(", ") {}"] }])
+    // 100 ms before the move, then 100 ms per character: into the second part, after ") ".
+    await advance(100 + 4 * 100 + 50)
+    expect(editor.text("a.ts")).toBe("f() ")
+    controller.userInterrupt()
+    const report = await until(controller.listen())
+    expect(report.batches[0]).toMatchObject({ status: "interrupted", unplayed: [{ type: ["", "{}"] }] })
+  })
+
+  it("rejects a batch that works in more than one file, without queueing it", async () => {
+    const { controller } = setup({ "a.ts": "", "b.ts": "" })
+    await controller.start()
+    await expect(controller.step([{ move: { file: "a.ts" } }, { point: { text: "x", file: "b.ts" } }])).rejects.toMatchObject({
+      code: "invalid_arguments",
+      message: expect.stringContaining("a.ts and b.ts"),
+    })
+    await expect(
+      controller.step([{ move: { file: "a.ts" } }, { type: ["x", ""] }, { move: { file: "a.ts", to: "file_end" } }]),
+    ).resolves.toBeDefined()
+    await expect(controller.step([{ type: ["y", ""] }, { move: { file: "b.ts" } }])).rejects.toMatchObject({
+      code: "invalid_arguments",
+      message: expect.stringContaining("before the batch's first edit"),
+    })
+  })
+})
+
 describe("interruptions", () => {
-  it("reports exactly what was typed and discards the queued batch", async () => {
+  it("shows the code as far as it got, returns the rest of the cut action, and discards the queued batch", async () => {
     const { editor, controller } = setup({ "a.ts": "" })
     await controller.start()
     await controller.step([{ move: { file: "a.ts" } }, { type: ["hello world", ""] }])
@@ -265,13 +343,18 @@ describe("interruptions", () => {
     controller.userMessage("use zod")
 
     const report = await until(second)
-    expect(report).toMatchObject({
+    expect(report).toEqual({
       batches: [
-        { id: 1, status: "interrupted", played: 1, partial: { index: 1, typed: "hel" }, unplayed: [] },
-        { id: 2, status: "discarded", played: 0, unplayed: [{ type: ["!", ""] }] },
+        {
+          id: 1,
+          status: "interrupted",
+          code: { file: "a.ts", lines: [{ number: 1, text: "hel▌" }] },
+          unplayed: [{ type: ["lo world", ""] }],
+        },
+        { id: 2, status: "discarded", unplayed: [{ type: ["!", ""] }] },
       ],
-      submitted: { id: 2, status: "discarded" },
       events: [{ kind: "message", text: "use zod" }],
+      turn: "agent",
     })
     await advance(1000)
     expect(editor.text("a.ts")).toBe("hel")
@@ -309,7 +392,8 @@ describe("interruptions", () => {
     editor.userEdit("a.ts", 0, 0, "XX")
     const report = await until(listen)
     expect(report.events).toEqual([{ kind: "edit", file: "a.ts", diff: expect.stringContaining("+XXhello") }])
-    expect(report.cursor).toEqual({ file: "a.ts", line: 1, column: 8 })
+    // The batch's code showed the cursor before the edit, so the report shows where it is now.
+    expect(report.cursor).toEqual({ file: "a.ts", lines: [{ number: 1, text: "XXhello▌" }] })
   })
 })
 
@@ -366,7 +450,7 @@ describe("cancellation", () => {
     // The next call isn't stuck behind the cancelled one, and gets the report.
     controller.userMessage("hello")
     const report = await until(controller.listen())
-    expect(report.batches).toEqual([{ id: 1, status: "completed", played: 1 }])
+    expect(report.batches).toMatchObject([{ id: 1, status: "completed" }])
     expect(report.events).toEqual([{ kind: "message", text: "hello" }])
   })
 
@@ -415,7 +499,7 @@ describe("sessions", () => {
     await controller.start("first")
     await controller.step([{ move: { file: "a.ts" } }, { type: ["abc", ""] }])
     const final = await until(controller.end("Done."))
-    expect(final.batches).toEqual([{ id: 1, status: "completed", played: 2 }])
+    expect(final.batches).toMatchObject([{ id: 1, status: "completed" }])
     expect(editor.text("a.ts")).toBe("abc")
     expect(panel.events).toContainEqual({ type: "session", active: false, reason: "agent", summary: "Done." })
     await expect(controller.listen()).rejects.toMatchObject({ code: "no_session" })
@@ -432,6 +516,7 @@ describe("sessions", () => {
     await controller.step([{ move: { file: "A.ts" } }, { type: ["abc", ""] }])
     const listening = controller.listen()
     await advance(1000)
+    editor.files.set(file, "XXabc")
     editor.controller.userEdit(file, "abc", "XXabc", [{ offset: 0, deleteLength: 0, text: "XX" }])
     const report = await until(listening)
     expect(editor.shown).toEqual([file])
@@ -490,8 +575,7 @@ describe("run", () => {
       {
         id: 1,
         status: "completed",
-        played: 2,
-        runs: [{ index: 1, command: "npm test", exit_code: 0, output: "4 passed", shell: "bash" }],
+        runs: [{ command: "npm test", exit_code: 0, output: "4 passed", shell: "bash" }],
       },
     ])
     expect(editor.commands[0]!.options).toMatchObject({ cwd: editor.resolvePath("sub"), waitMs: 120_000 })
@@ -509,9 +593,8 @@ describe("run", () => {
       {
         id: 1,
         status: "failed",
-        played: 1,
         unplayed: [{ say: "All green." }],
-        error: { index: 0, kind: "command_failed" },
+        error: { kind: "command_failed" },
         runs: [{ command: "npm test", exit_code: 1, output: "1 failed" }],
       },
       { id: 2, status: "discarded" },
@@ -528,8 +611,7 @@ describe("run", () => {
       {
         id: 1,
         status: "completed",
-        played: 1,
-        runs: [{ index: 0, command: "npm start", output: "listening on 3000", running: true }],
+        runs: [{ command: "npm start", output: "listening on 3000", running: true }],
       },
     ])
   })
@@ -543,7 +625,7 @@ describe("run", () => {
     controller.userInterrupt()
     const report = await until(controller.listen())
     expect(report.batches).toMatchObject([
-      { id: 1, status: "interrupted", played: 1, unplayed: [{ say: "Done." }], runs: [{ running: true }] },
+      { id: 1, status: "interrupted", unplayed: [{ say: "Done." }], runs: [{ running: true }] },
     ])
   })
 
@@ -555,7 +637,7 @@ describe("run", () => {
     await advance(1000)
     controller.userInterrupt()
     const report = await until(controller.listen())
-    expect(report.batches).toEqual([{ id: 1, status: "discarded", played: 0, unplayed: [{ run: "npm test" }] }])
+    expect(report.batches).toEqual([{ id: 1, status: "discarded", unplayed: [{ run: "npm test" }] }])
     expect(editor.commands).toEqual([])
   })
 
@@ -572,7 +654,7 @@ describe("run", () => {
     controller.decideRun(confirm!.type === "run" ? confirm!.id : -1, false)
     const report = await until(controller.listen())
     expect(report.batches).toMatchObject([
-      { id: 1, status: "failed", played: 0, error: { index: 0, kind: "command_declined" }, unplayed: [{ run: "rm -rf build" }] },
+      { id: 1, status: "failed", error: { kind: "command_declined" }, unplayed: [{ run: "rm -rf build" }] },
     ])
     expect(editor.commands).toEqual([])
   })

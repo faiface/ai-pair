@@ -1,6 +1,6 @@
 // Anchor resolution. See "Anchors" in PROTOCOL.md.
 
-import type { Anchor, Candidate, ErrorKind, Span, Spot } from "@ai-pair/protocol"
+import { CURSOR_MARKER, type Anchor, type Candidate, type ErrorKind, type Span, type Spot } from "@ai-pair/protocol"
 import { lineText, position } from "./text"
 
 export type Range = { start: number; end: number }
@@ -27,8 +27,14 @@ function candidates(text: string, starts: number[]): Candidate[] {
   })
 }
 
+/** Text copied from a report's code may carry the cursor marker. */
+function unmarked(text: string): string {
+  return text.replaceAll(CURSOR_MARKER, "")
+}
+
 /** Resolves an anchor in `text`: a unique match, or the one closest to `near_line`. */
 export function resolveAnchor(text: string, anchor: Anchor): Resolution {
+  anchor = { ...anchor, text: unmarked(anchor.text) }
   const starts = findAll(text, anchor.text)
   const range = (start: number): Resolution => ({
     ok: true,
@@ -59,9 +65,10 @@ export function resolveAnchor(text: string, anchor: Anchor): Resolution {
 
 /** Resolves a spot: the offset between `before` and `after`, which occur together. */
 export function resolveSpot(text: string, spot: Spot): Resolution {
-  const r = resolveAnchor(text, { text: spot.before + spot.after, near_line: spot.near_line })
+  const before = unmarked(spot.before)
+  const r = resolveAnchor(text, { text: before + unmarked(spot.after), near_line: spot.near_line })
   if (!r.ok) return r
-  const at = r.range.start + spot.before.length
+  const at = r.range.start + before.length
   return { ok: true, range: { start: at, end: at } }
 }
 
@@ -70,9 +77,8 @@ export function resolveSpan(text: string, span: Span): Resolution {
   if (!("from" in span)) return resolveAnchor(text, span)
   const start = resolveAnchor(text, span.from)
   if (!start.ok) return start
-  const end = span.to.text === "" ? -1 : text.indexOf(span.to.text, start.range.end)
-  if (end === -1) {
-    return { ok: false, kind: "anchor_not_found", message: `Text not found after \`from\`: ${JSON.stringify(span.to.text)}` }
-  }
-  return { ok: true, range: { start: start.range.start, end: end + span.to.text.length } }
+  const to = unmarked(span.to.text)
+  const end = to === "" ? -1 : text.indexOf(to, start.range.end)
+  if (end === -1) return { ok: false, kind: "anchor_not_found", message: `Text not found after \`from\`: ${JSON.stringify(to)}` }
+  return { ok: true, range: { start: start.range.start, end: end + to.length } }
 }

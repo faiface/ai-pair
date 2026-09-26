@@ -22,8 +22,9 @@ Status: **draft**.
 ```
 
 - **`pair-mcp`** is the MCP server the harness launches over stdio. It holds the
-  tool schemas, the server instructions, and the `start` prompt, and forwards
-  every tool call to the extension. It has no session state of its own.
+  tool schemas, the server instructions, and the `start` prompt, forwards
+  every tool call to the extension, and renders the extension's structured
+  reports as the text the agent reads. It has no session state of its own.
 - **The core** is an editor-agnostic TypeScript library, running inside the
   extension: sessions, the batch queue, the playback scheduler, anchor
   resolution, cursor tracking, the event log, and report assembly. It has no

@@ -82,7 +82,7 @@ const Action = z.union([
     run: z
       .string()
       .describe(
-        "Run a shell command in a terminal the programmer sees: tests, builds, starting the app. They may be asked to allow it. Output, exit code and the terminal's `shell` come back in the batch's `runs`; a nonzero exit fails the batch. Make it the last action of its batch.",
+        "Run a shell command in a terminal the programmer sees: tests, builds, starting the app. They may be asked to allow it. The exit code, the output and the terminal's shell come back in the batch's report; a nonzero exit fails the batch. Make it the last action of its batch.",
       ),
     wait: z.number().optional().describe("Seconds to wait (default 120). For a server, a few: it keeps running."),
   }),
@@ -117,11 +117,11 @@ export const TOOLS = {
     },
   },
   step: {
-    description: `Submit a batch of visible actions, played in the programmer's editor at a human pace. A batch is one idea: usually a \`say\` explaining what's next, then the few edits it describes.
+    description: `Submit a batch of visible actions, played in the programmer's editor at a human pace. A batch is one idea: usually a \`say\` explaining what's next, then the few edits it describes. A batch works in one file: name it (in \`move\` or \`point\`) before its first edit, and start a new batch to switch files.
 
 Pipelined: the call queues the batch and returns once the PREVIOUS batch has finished playing, with that batch's report. So plan the next batch while this one plays. The first call returns immediately.
 
-Read every report. If a batch was interrupted or failed, or the programmer said or did something (\`events\`), your later batches were discarded; their actions come back in \`unplayed\`. Take what happened into account and re-plan. \`partial.typed\` says exactly what made it into the file. A message with a \`selection\` is about the code the programmer had selected. With \`waiting: true\`, nothing has finished yet: carry on as usual.
+Read every report. It shows each finished batch's code as it now reads, with your cursor marked \`▌\`: check it's what you meant. If a batch was interrupted or failed, or the programmer said or did something, your later batches were discarded; what didn't play is listed, ready to resubmit, starting with what's left of an interrupted action. Take what happened into account and re-plan.
 
 An empty batch waits for your queued batches without waiting for the programmer.`,
     inputSchema: {
@@ -130,7 +130,7 @@ An empty batch waits for your queued batches without waiting for the programmer.
   },
   listen: {
     description:
-      "Wait for the programmer. First collects the reports of your queued batches, then returns when the programmer does something: a message (with a `selection` when they asked about code they had selected), an edit, a turn change, or ending the session. Call it whenever you're done or waiting: during a session, never end your turn. During the programmer's turn you're the navigator (only `say` and `point` work), and `listen` also returns shortly after they stop typing, so you can comment. With `waiting: true`, nothing happened yet: call it again.",
+      "Wait for the programmer. First collects the reports of your queued batches, then returns when the programmer does something: a message (with the code they had selected, if any), an edit, a turn change, or ending the session. Call it whenever you're done or waiting: during a session, never end your turn. During the programmer's turn you're the navigator (only `say` and `point` work), and `listen` also returns shortly after they stop typing, so you can comment. If nothing happened in time, it says so: call it again.",
     inputSchema: {},
   },
   end: {

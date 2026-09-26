@@ -1,8 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
 import { z } from "zod"
-import type { ToolName } from "@ai-pair/protocol"
+import type { FileContent, Report, ToolName } from "@ai-pair/protocol"
 import { RelayError, type EditorLink } from "./link"
+import { renderFile, renderReport } from "./render"
 import { TOOLS } from "./tools"
 
 /** Always loaded by the harness, so kept short; the full guide comes with `start`. */
@@ -26,7 +27,8 @@ export function createServer(link: EditorLink, guide: string, cwd: string): McpS
   const run = async (tool: ToolName, args: object, signal: AbortSignal): Promise<CallToolResult> => {
     try {
       const result = await link.call(tool, args as Record<string, unknown>, signal)
-      const content: CallToolResult["content"] = [{ type: "text", text: JSON.stringify(result) }]
+      const text = tool === "read" ? renderFile(result as FileContent) : renderReport(result as Report, tool)
+      const content: CallToolResult["content"] = [{ type: "text", text }]
       if (tool === "start") content.push({ type: "text", text: `# Pairing guide\n\n${guide}` })
       return { content }
     } catch (e) {
