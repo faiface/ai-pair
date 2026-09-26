@@ -20,7 +20,7 @@ import * as nodePath from "node:path"
 import { actionKinds, CURSOR_MARKER, moveProblem, ToolError } from "@ai-pair/protocol"
 import { resolveSpan, resolveSpot, type Resolution } from "./anchors"
 import { fileDiff } from "./diff"
-import type { AgentState, Change, CursorView, EditorPort, PanelPort, Ref, SharedSelection } from "./ports"
+import type { AgentState, Change, CursorView, EditorPort, Focus, PanelPort, Ref, SharedSelection } from "./ports"
 import { isLineStart, lineEnd, position, splitLines } from "./text"
 import { Timeline } from "./timeline"
 import { defaultTiming, withOverrides, type Timing, type TimingOverrides } from "./timing"
@@ -77,6 +77,10 @@ type Session = {
   cursor: { file: string; offset: number } | null
   selection: { start: number; end: number } | null
   point: { file: string; start: number; end: number } | null
+  /** What the view follows: the cursor, or, right after a `point`, the pointed code. */
+  focus: Focus
+  /** The pointed code is in another file than the cursor, or far from it: looking back changes the view. */
+  pointFar: boolean
   timeline: Timeline
   running: boolean
   reading: boolean
@@ -174,6 +178,8 @@ export class Controller {
         cursor: null,
         selection: null,
         point: null,
+        focus: "cursor",
+        pointFar: false,
         timeline: new Timeline(this.pauseReasons.size > 0),
         running: false,
         reading: false,
@@ -296,6 +302,7 @@ export class Controller {
     const s = this.activeSession()
     if (!s || s.turn === "user") return
     s.turn = "user"
+    s.focus = "cursor"
     s.events.push({ kind: "turn", to: "user" })
     this.panel.post({ type: "turn", to: "user" })
     this.interrupt(s)
@@ -353,8 +360,7 @@ export class Controller {
     if (this.pauseReasons.size > 0) return
     const s = this.session
     if (s) {
-      const cursor = this.cursorView(s)
-      if (cursor && s.turn === "agent") this.editor.reveal(cursor)
+      if (s.turn === "agent" && (s.cursor || s.point)) this.editor.reveal()
       s.timeline.resume()
     }
     this.render()
@@ -727,6 +733,21 @@ export class Controller {
       return fail("not_your_turn", "During the programmer's turn, only `say` and `point` are allowed.")
     }
 
+    // An action at the cursor brings the view back to it from the code last pointed at. A far jump
+    // back gets a far move's pause, before anything happens there; a `move` has its own.
+    const cursorAction = !("say" in action) && !("point" in action) && !("run" in action)
+    const lookingBack = cursorAction && s.focus === "point"
+    const farBack = lookingBack && s.pointFar
+    if (lookingBack) {
+      s.focus = "cursor"
+      if (farBack && !("move" in action) && s.cursor) {
+        await this.editor.show(s.cursor.file)
+        this.render()
+        if (!(await this.delay(s, this.config.timing.afterMoveFarMs))) return { kind: "interrupted" }
+      }
+      this.render()
+    }
+
     if ("say" in action) {
       this.panel.post({ type: "say", text: action.say })
       const ms = readingTime(action.say, this.config.timing.reading) / this.speed
@@ -765,6 +786,7 @@ export class Controller {
         offset = r.range.start
       }
       const near =
+        !farBack &&
         s.cursor?.file === file &&
         Math.abs(position(text, s.cursor.offset).line - position(text, offset).line) <= t.nearLines
       s.cursor = { file, offset }
@@ -823,7 +845,15 @@ export class Controller {
       const r = resolveSpan(text, p)
       if (!r.ok) return failed(r)
       s.point = { file, ...r.range }
+      if (s.turn === "agent") {
+        // The view goes to the pointed code, so the `say` about it plays while the programmer looks at it.
+        const cursorLine = s.cursor?.file === file ? position(text, s.cursor.offset).line : undefined
+        const pointLine = position(text, r.range.start).line
+        s.pointFar = cursorLine === undefined || Math.abs(cursorLine - pointLine) > this.config.timing.nearLines
+        s.focus = "point"
+      }
       this.editor.renderPoint(s.point)
+      this.render()
       this.panel.post({ type: "point", file: this.editor.displayPath(file), line: position(text, r.range.start).line })
       await this.delay(s, this.config.timing.afterPointMs)
       return ok
@@ -1024,7 +1054,7 @@ export class Controller {
   private render(): void {
     const s = this.activeSession()
     const state = this.state()
-    this.editor.renderCursor(s ? this.cursorView(s) : null, state)
+    this.editor.renderCursor(s ? this.cursorView(s) : null, state, s?.focus ?? "cursor")
     if (!s) return
     const paused = this.pauseReasons.size > 0
     const key = `${state}/${s.turn}/${paused}`

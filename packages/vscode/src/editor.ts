@@ -11,6 +11,7 @@ import type {
   CursorView,
   EditOptions,
   EditorPort,
+  Focus,
   Ref,
   RunOptions,
   SharedSelection,
@@ -18,6 +19,9 @@ import type {
 import { PairTerminals } from "./terminal"
 
 type OwnEdit = { offset: number; deleteLength: number; text: string }
+
+/** A place follow mode keeps in view. */
+type Target = { file: string; offset: number }
 
 /** States in which the programmer's view follows the agent cursor. */
 const FOLLOWING: ReadonlySet<AgentState> = new Set(["typing", "read", "thinking", "listening"])
@@ -62,6 +66,7 @@ export class VsCodeEditor implements EditorPort, vscode.Disposable {
   private cursor: CursorView | null = null
   private state: AgentState = "thinking"
   private point: { file: string; start: number; end: number } | null = null
+  private focus: Focus = "cursor"
   private pulse?: ReturnType<typeof setInterval>
   private pulseOn = true
   private selfNavUntil = 0
@@ -199,14 +204,16 @@ export class VsCodeEditor implements EditorPort, vscode.Disposable {
     await this.openDocument(file)?.save()
   }
 
-  renderCursor(cursor: CursorView | null, state: AgentState): void {
+  renderCursor(cursor: CursorView | null, state: AgentState, focus: Focus): void {
     this.cursor = cursor
+    this.focus = focus
     if (state !== this.state) {
       this.state = state
       this.updatePulse()
     }
     this.redraw()
-    if (cursor && FOLLOWING.has(state)) this.follow(cursor)
+    const target = this.target()
+    if (target && FOLLOWING.has(state)) this.follow(target)
   }
 
   renderPoint(point: { file: string; start: number; end: number } | null): void {
@@ -214,8 +221,9 @@ export class VsCodeEditor implements EditorPort, vscode.Disposable {
     this.redraw()
   }
 
-  reveal(cursor: CursorView): void {
-    void this.show(cursor.file).then(() => this.follow(cursor, true))
+  reveal(): void {
+    const target = this.target()
+    if (target) void this.show(target.file).then(() => this.follow(target, true))
   }
 
   runCommand(command: string, options: RunOptions): Promise<CommandOutcome> {
@@ -295,37 +303,47 @@ export class VsCodeEditor implements EditorPort, vscode.Disposable {
     this.controller?.userEdit(file, before, after, changes)
   }
 
+  // Looking away from what the view follows pauses playback: the cursor, or the code it points at.
+
   private onActiveEditor(editor: vscode.TextEditor | undefined): void {
     if (editor?.document.uri.scheme === "file") this.onSelectionChange(editor)
-    if (!editor || Date.now() < this.selfNavUntil || !this.cursor || !FOLLOWING.has(this.state)) return
-    if (editor.document.uri.fsPath !== this.cursor.file) this.controller?.pause("away")
+    const target = this.target()
+    if (!editor || Date.now() < this.selfNavUntil || !target || !FOLLOWING.has(this.state)) return
+    if (editor.document.uri.fsPath !== target.file) this.controller?.pause("away")
   }
 
   private onScroll(e: vscode.TextEditorVisibleRangesChangeEvent): void {
-    if (Date.now() < this.selfNavUntil || !this.cursor || !FOLLOWING.has(this.state)) return
-    if (e.textEditor.document.uri.fsPath !== this.cursor.file) return
-    const line = e.textEditor.document.positionAt(this.cursor.offset).line
+    const target = this.target()
+    if (Date.now() < this.selfNavUntil || !target || !FOLLOWING.has(this.state)) return
+    if (e.textEditor.document.uri.fsPath !== target.file) return
+    const line = e.textEditor.document.positionAt(target.offset).line
     const visible = e.visibleRanges.some((r) => r.start.line <= line && line <= r.end.line)
     if (!visible) this.controller?.pause("away")
   }
 
   // ---- Rendering -----------------------------------------------------------
 
-  /** Keeps the agent cursor in the upper part of the viewport, scrolling only when it leaves a band. */
-  private follow(cursor: CursorView, force = false): void {
-    const editor = this.visibleEditor(cursor.file)
+  /** What follow mode keeps in view: the agent cursor, or the start of the code it points at. */
+  private target(): Target | null {
+    if (this.focus === "point" && this.point) return { file: this.point.file, offset: this.point.start }
+    return this.cursor
+  }
+
+  /** Keeps the target in the upper part of the viewport, scrolling only when it leaves a band. */
+  private follow(target: Target, force = false): void {
+    const editor = this.visibleEditor(target.file)
     const visible = editor?.visibleRanges[0]
     if (!editor || !visible) return
-    const line = editor.document.positionAt(cursor.offset).line
+    const line = editor.document.positionAt(target.offset).line
     const height = Math.max(1, visible.end.line - visible.start.line)
     const top = visible.start.line + Math.floor(height * 0.1)
     const bottom = visible.start.line + Math.floor(height * 0.6)
-    // At the top of a file the cursor can't sit lower in the viewport, and that's fine.
+    // At the top of a file the target can't sit lower in the viewport, and that's fine.
     const inBand = line <= bottom && (line >= top || visible.start.line === 0)
     if (!force && inBand) return
-    const target = Math.max(0, line - Math.floor(height / 3))
+    const scrollTo = Math.max(0, line - Math.floor(height / 3))
     this.selfNav()
-    editor.revealRange(new vscode.Range(target, 0, target, 0), vscode.TextEditorRevealType.AtTop)
+    editor.revealRange(new vscode.Range(scrollTo, 0, scrollTo, 0), vscode.TextEditorRevealType.AtTop)
   }
 
   private redraw(): void {

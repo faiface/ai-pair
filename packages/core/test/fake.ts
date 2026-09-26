@@ -7,6 +7,7 @@ import type {
   CursorView,
   EditOptions,
   EditorPort,
+  Focus,
   PanelEvent,
   PanelPort,
   RunOptions,
@@ -60,14 +61,19 @@ export class FakeEditor implements EditorPort {
     this.dirty.delete(file)
     this.saved.push(file)
   }
-  renderCursor(cursor: CursorView | null, state: AgentState): void {
+  focus: Focus = "cursor"
+  renderCursor(cursor: CursorView | null, state: AgentState, focus: Focus): void {
     this.cursor = cursor
     this.state = state
+    this.focus = focus
   }
   renderPoint(point: { file: string; start: number; end: number } | null): void {
     this.point = point
   }
-  reveal(): void {}
+  reveals = 0
+  reveal(): void {
+    this.reveals++
+  }
 
   commands: { command: string; options: RunOptions }[] = []
   /**

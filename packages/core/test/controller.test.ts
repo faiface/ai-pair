@@ -252,6 +252,76 @@ describe("editing", () => {
   })
 })
 
+describe("pointing", () => {
+  const lines = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`).join("\n")
+
+  it("follows the pointed code while the agent talks about it, then goes back to the cursor", async () => {
+    const { editor, controller } = setup({ "a.ts": lines })
+    await controller.start()
+    await until(controller.step([{ move: { file: "a.ts", before: "line 2", after: "\n" } }]))
+    await until(controller.step([{ point: { text: "line 35" } }, { say: "This one." }]))
+    expect(editor.focus).toBe("point")
+    expect(editor.point).toBeDefined()
+    await until(controller.step([{ type: ["!", ""] }]))
+    await until(controller.step([]))
+    expect(editor.focus).toBe("cursor")
+    expect(editor.text("a.ts")).toContain("line 2!")
+  })
+
+  it("pauses like a far move when going back from far away, and not from nearby", async () => {
+    const { controller } = setup(
+      { "a.ts": lines },
+      { timing: { ...testConfig.timing, beforeMoveMs: 0, afterMoveFarMs: 1000, afterMoveNearMs: 0 } },
+    )
+    await controller.start()
+    await until(controller.step([{ move: { file: "a.ts", before: "line 2", after: "\n" } }]))
+    await until(controller.step([]))
+    const elapsed = async (actions: Action[]) => {
+      const before = Date.now()
+      await controller.step(actions)
+      await until(controller.step([]))
+      return Date.now() - before
+    }
+    expect(await elapsed([{ point: { text: "line 35" } }, { type: ["x", ""] }])).toBeGreaterThanOrEqual(1000)
+    expect(await elapsed([{ point: { text: "line 4\n" } }, { type: ["y", ""] }])).toBeLessThan(1000)
+  })
+
+  it("shows another file for a point, and the cursor's file again with the next edit", async () => {
+    const { editor, controller } = setup({ "a.ts": "a\n", "b.ts": "b\n" })
+    await controller.start()
+    await until(controller.step([{ move: { file: "a.ts", to: "file_end" } }]))
+    await until(controller.step([{ point: { text: "b", file: "b.ts" } }, { say: "Over there." }]))
+    await until(controller.step([{ type: ["x", ""] }]))
+    await until(controller.step([]))
+    expect(editor.shown).toEqual([editor.resolvePath("a.ts"), editor.resolvePath("b.ts"), editor.resolvePath("a.ts")])
+    expect(editor.text("a.ts")).toBe("a\nx")
+  })
+
+  it("leaves the view alone during the programmer's turn", async () => {
+    const { editor, controller } = setup({ "a.ts": "a\n", "b.ts": "b\n" })
+    await controller.start()
+    await until(controller.step([{ move: { file: "a.ts" } }]))
+    await until(controller.step([]))
+    controller.takeTurn()
+    await until(controller.listen())
+    await until(controller.step([{ point: { text: "b", file: "b.ts" } }]))
+    await until(controller.step([]))
+    expect(editor.focus).toBe("cursor")
+    expect(editor.shown).toEqual([editor.resolvePath("a.ts")])
+  })
+
+  it("brings back what the view follows on resume", async () => {
+    const { editor, controller } = setup({ "a.ts": lines })
+    await controller.start()
+    await until(controller.step([{ move: { file: "a.ts" } }, { point: { text: "line 35" } }]))
+    await until(controller.step([]))
+    controller.pause()
+    controller.resume()
+    expect(editor.reveals).toBe(1)
+    expect(editor.focus).toBe("point")
+  })
+})
+
 describe("reports", () => {
   it("shows the lines a batch changed, extended to the cursor, as they read when it ended", async () => {
     const { controller } = setup({ "a.ts": "a\nb\nc\n" })

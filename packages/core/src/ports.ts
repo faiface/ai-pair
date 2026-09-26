@@ -4,6 +4,9 @@ import type { Excerpt, Turn } from "@ai-pair/protocol"
 
 export type AgentState = "typing" | "read" | "running" | "thinking" | "paused" | "listening" | "navigator"
 
+/** What follow mode keeps in the programmer's view: the agent cursor, or the code it last pointed at. */
+export type Focus = "cursor" | "point"
+
 export type CursorView = {
   file: string
   offset: number
@@ -56,10 +59,10 @@ export interface EditorPort {
   show(file: string): Promise<void>
   edit(file: string, offset: number, deleteLength: number, text: string, options: EditOptions): Promise<void>
   save(file: string): Promise<void>
-  renderCursor(cursor: CursorView | null, state: AgentState): void
+  renderCursor(cursor: CursorView | null, state: AgentState, focus: Focus): void
   renderPoint(point: { file: string; start: number; end: number } | null): void
-  /** Brings the programmer's view back to the agent cursor. */
-  reveal(cursor: CursorView): void
+  /** Brings the programmer's view back to what it follows. */
+  reveal(): void
   /** Runs a command in a terminal the programmer can see. */
   runCommand(command: string, options: RunOptions): Promise<CommandOutcome>
 }

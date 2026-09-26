@@ -130,7 +130,8 @@ Rules:
 ### Pause and follow mode
 
 During the agent's turn, the programmer's view **follows the agent cursor**,
-so every `move` is visible to them.
+so every `move` is visible to them, or, right after a `point`, the pointed
+code.
 
 Playback pauses when the programmer presses Pause, navigates away, or starts
 typing a reply, until they resume. **Pausing is not an event**: the agent isn't told,
@@ -289,9 +290,15 @@ Highlights a range without editing it and without moving the agent cursor,
 for talking about code: "this function is called from two places…". The
 highlight persists until the next `point` or the next editing action.
 
-During the agent's turn, if `file` is not the visible file, the view switches
-to it. During the programmer's turn, the view never switches; the narration
-panel shows a clickable reference instead.
+**Point, then say.** During the agent's turn, the view follows the pointed
+code, switching to its `file` if needed, so the `say` right after it plays
+while the programmer is looking at it. The next action at the cursor (`move`,
+`select`, `type`, `type_fast`, `delete`) brings the view back to the cursor;
+`say` and `run` don't. If the pointed code was in another file or far from
+the cursor, that return pauses like a far move before the action.
+
+During the programmer's turn, the view never switches; the narration panel
+shows a clickable reference instead.
 
 ### `run`
 

@@ -143,13 +143,17 @@ edits without undo stops between them, with stops at the action's boundaries.
 During the agent's turn:
 
 - The view follows the agent cursor across files.
-- The agent cursor is kept in the **upper third of the viewport**, so it sits
-  roughly level with the narration panel's current message. The view scrolls
-  only when the cursor leaves a comfortable band, not on every keystroke.
+- **After a `point`, it follows the pointed code instead**, so the narration
+  about it plays while it's in view. The next action at the cursor (a move, a
+  selection, typing or a deletion) brings the view back to the cursor; after
+  a far `point`, with the pause of a far move first.
+- What the view follows is kept in the **upper third of the viewport**, so it
+  sits roughly level with the narration panel's current message. The view
+  scrolls only when it leaves a comfortable band, not on every keystroke.
 - Playback **pauses automatically** when the programmer switches to another
-  editor or scrolls the agent cursor out of view. Scrolling caused by follow
-  mode itself is ignored.
-- **Resume always brings the view back to the agent cursor** first, then
+  editor or scrolls what the view follows out of view. Scrolling caused by
+  follow mode itself is ignored.
+- **Resume always brings the view back** to what it follows first, then
   playback continues.
 
 ### Saving

@@ -76,7 +76,9 @@ const Action = z.union([
   action({
     point: z
       .union([Anchor.extend({ file: file.optional() }), Range.extend({ file: file.optional() })])
-      .describe("Highlight code without editing it or moving your cursor, to talk about it. Put the `say` after it."),
+      .describe(
+        "Highlight code without editing it or moving your cursor, to talk about it: point first, then `say` what's there. The programmer's view goes to the pointed code, and comes back to your cursor with your next move or edit.",
+      ),
   }),
   action({
     run: z

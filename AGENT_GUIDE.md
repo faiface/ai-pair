@@ -282,6 +282,12 @@ type_fast ["./todos", ""]                      its text
   apply.
 - **Edit visibly.** `select` before replacing or deleting, so the programmer
   sees what's about to change.
+- **Point, then say.** To talk about code other than what you're typing, a
+  function it calls, or the line the programmer asked about, `point` at it
+  first, then `say` what's there. The programmer's view goes to the pointed
+  code, so your narration plays while they look at it; it comes back to your
+  cursor with your next move or edit. Never `say` first and `point` after:
+  they'd read about code they can't see yet.
 - **Anchors: long enough to be unique.** A short text like `) {` or
   `import {` often occurs several times, and then the action fails and your
   next batch is discarded. Use a whole line, or a spot with context on both
@@ -327,6 +333,7 @@ type_fast ["./todos", ""]                      its text
 - A long stretch of silent background work followed by a big reveal.
 - Hopping between files every few lines.
 - Reading the code aloud instead of explaining it.
+- Talking about code before pointing at it.
 - Typing in front of existing text, pushing it along.
 - Typing a block top to bottom, with its closing brace last.
 - Typing an object, array, index, record, call, string, block comment or

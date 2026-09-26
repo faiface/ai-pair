@@ -6,6 +6,7 @@ export type {
   CursorView,
   EditOptions,
   EditorPort,
+  Focus,
   PanelEvent,
   PanelPort,
   Ref,
