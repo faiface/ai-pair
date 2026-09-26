@@ -3,3 +3,5 @@ dist/
 dist-test/
 # Copied from the root LICENSE when packaging.
 packages/vscode/LICENSE
+# Built by `npm run package`.
+*.vsix

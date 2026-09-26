@@ -18,21 +18,8 @@ MCP, so the agent keeps all its usual tools.
 
 ## Install
 
-You need **VS Code 1.105 or newer**.
-
-### From the prebuilt `.vsix`
-
-The repository includes a packaged extension, `ai-pair-0.1.0.vsix`:
-
-```sh
-code --install-extension ai-pair-0.1.0.vsix
-```
-
-Or, in VS Code: Extensions view → `…` menu → *Install from VSIX…*
-
-### From source
-
-You also need **Node.js 20 or newer**.
+You need **VS Code 1.105 or newer** and **Node.js 20 or newer**. Build the
+extension from source and install it:
 
 ```sh
 git clone https://github.com/faiface/ai-pair.git
@@ -41,6 +28,9 @@ npm install
 npm run package
 code --install-extension ai-pair-0.1.0.vsix
 ```
+
+Or, instead of the last line, in VS Code: Extensions view → `…` menu →
+*Install from VSIX…*
 
 ## Connect your agent
 
@@ -151,9 +141,6 @@ npm run build             # development build of the extension
 npm run test:integration  # plays a session inside a real, isolated VS Code (macOS)
 npm run package           # production build → ai-pair-<version>.vsix
 ```
-
-The committed `.vsix` doesn't update itself: run `npm run package` and commit
-the result when a change should reach people installing from it.
 
 To run your working copy, open the repository in VS Code and press F5, or:
 
