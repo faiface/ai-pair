@@ -14,10 +14,11 @@ import type {
   Report,
   RunResult,
   Turn,
+  TypeText,
 } from "@ai-pair/protocol"
 import * as nodePath from "node:path"
-import { actionKinds, ToolError } from "@ai-pair/protocol"
-import { resolveAnchor, resolveSpan, type Resolution } from "./anchors"
+import { actionKinds, moveProblem, ToolError } from "@ai-pair/protocol"
+import { resolveSpan, resolveSpot, type Resolution } from "./anchors"
 import { fileDiff } from "./diff"
 import type { AgentState, Change, CursorView, EditorPort, PanelPort, Ref, SharedSelection } from "./ports"
 import { isLineStart, lineEnd, position, splitLines } from "./text"
@@ -663,24 +664,28 @@ export class Controller {
 
     if ("move" in action) {
       const m = action.move
+      const problem = moveProblem(m)
+      if (problem) return fail("invalid_action", problem)
       const file = m.file !== undefined ? this.resolvePath(s, m.file) : s.cursor?.file
       if (!file) return fail("no_file", "The agent cursor isn't in a file yet; give `file`.")
+      const relative = m.lines !== undefined || m.to === "end"
+      if (relative && s.cursor?.file !== file) {
+        return fail("no_file", "`lines` and `to: \"end\"` move relative to your cursor, in its file.")
+      }
       const t = this.config.timing
       if (!(await this.delay(s, t.beforeMoveMs))) return { kind: "interrupted" }
       await this.editor.show(file)
       const text = await this.editor.getText(file)
       let offset: number
-      if (m.lines !== undefined) {
-        if (s.cursor?.file !== file) return fail("no_file", "`lines` moves relative to your cursor, in its file.")
-        const line = position(text, s.cursor.offset).line + m.lines
+      if (relative) {
+        const line = position(text, s.cursor!.offset).line + (m.lines ?? 0)
         offset = lineEnd(text, Math.max(1, Math.min(splitLines(text).length, line)))
-      } else if (m.position === "file_end") offset = text.length
-      else if (m.position === "file_start" || m.text === undefined) offset = 0
+      } else if (m.to === "file_end") offset = text.length
+      else if (m.before === undefined || m.after === undefined) offset = 0
       else {
-        const from = s.cursor?.file === file ? s.cursor.offset : 0
-        const r = resolveAnchor(text, m as Anchor, from)
+        const r = resolveSpot(text, { before: m.before, after: m.after, near_line: m.near_line })
         if (!r.ok) return failed(r)
-        offset = m.at === "start" ? r.range.start : r.range.end
+        offset = r.range.start
       }
       const near =
         s.cursor?.file === file &&
@@ -697,7 +702,7 @@ export class Controller {
       if (!s.cursor) return fail("no_file", "The agent cursor isn't in a file yet; `move` first.")
       if (!(await this.delay(s, this.config.timing.beforeSelectMs))) return { kind: "interrupted" }
       await this.editor.show(s.cursor.file)
-      const r = resolveSpan(await this.editor.getText(s.cursor.file), action.select, s.cursor.offset)
+      const r = resolveSpan(await this.editor.getText(s.cursor.file), action.select)
       if (!r.ok) return failed(r)
       s.selection = r.range
       s.cursor.offset = r.range.end
@@ -708,7 +713,11 @@ export class Controller {
 
     if ("type" in action || "type_fast" in action) {
       const fast = "type_fast" in action
-      return this.type(s, fast ? action.type_fast : action.type, fast, touched)
+      const parts: unknown = fast ? action.type_fast : action.type
+      if (!Array.isArray(parts) || parts.length !== 2 || !parts.every((p) => typeof p === "string")) {
+        return fail("invalid_action", "Give the text to type as two parts, `[before, after]`: the cursor ends between them.")
+      }
+      return this.type(s, parts as TypeText, fast, touched)
     }
 
     if ("delete" in action) {
@@ -732,7 +741,7 @@ export class Controller {
       if (!file) return fail("no_file", "The agent cursor isn't in a file yet; give `file`.")
       if (s.turn === "agent") await this.editor.show(file)
       const text = await this.editor.getText(file)
-      const r = resolveSpan(text, p, s.cursor?.file === file ? s.cursor.offset : 0)
+      const r = resolveSpan(text, p)
       if (!r.ok) return failed(r)
       s.point = { file, ...r.range }
       this.editor.renderPoint(s.point)
@@ -814,7 +823,8 @@ export class Controller {
     return ok
   }
 
-  private async type(s: Session, text: string, fast: boolean, touched: Set<string>): Promise<Outcome> {
+  /** Types `before`, then `after`, then steps back to between them. */
+  private async type(s: Session, [before, after]: TypeText, fast: boolean, touched: Set<string>): Promise<Outcome> {
     if (!s.cursor) return fail("no_file", "The agent cursor isn't in a file yet; `move` first.")
     const cursor = s.cursor
     await this.editor.show(cursor.file)
@@ -824,7 +834,8 @@ export class Controller {
     const eol = await this.editor.eol(cursor.file)
     const insertAt = s.selection ? s.selection.start : cursor.offset
     const { timing } = this.config
-    const chunks = planTyping(text, timing.type, isLineStart(doc, insertAt), this.config.random, fast ? timing.fastFactor : 1)
+    const scale = fast ? timing.fastFactor : 1
+    const chunks = planTyping(before + after, timing.type, isLineStart(doc, insertAt), this.config.random, scale)
 
     if (chunks.length === 0 && s.selection) chunks.push({ text: "", delay: 0 })
     let typed = ""
@@ -844,6 +855,12 @@ export class Controller {
       })
       typed += chunk.text
       this.render()
+    }
+    if (after !== "") {
+      // Into the pair just closed: a move within sight, so the same pause as one.
+      cursor.offset -= eol === "\n" ? after.length : after.replaceAll("\n", eol).length
+      this.render()
+      await this.delay(s, timing.afterMoveNearMs * scale)
     }
     return ok
   }

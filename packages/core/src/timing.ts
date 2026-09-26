@@ -27,7 +27,7 @@ export type Timing = {
   reading: Reading
   /** Before a move, so the jump doesn't look instantaneous. */
   beforeMoveMs: number
-  /** After a move nearby: the eyes find the cursor again. */
+  /** After a move nearby, and after `type` steps back between its parts: the eyes find the cursor again. */
   afterMoveNearMs: number
   /** After a move to another file or far away: the view changed, re-orient. */
   afterMoveFarMs: number

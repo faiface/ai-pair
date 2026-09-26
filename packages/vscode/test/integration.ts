@@ -72,8 +72,8 @@ export async function run(): Promise<void> {
   c.setSpeed(1)
   const alphabet = "abcdefghijklmnopqrstuvwxyz"
   await c.start("interrupt test")
-  await c.step([{ move: { file: "scratch.ts" } }, { type: alphabet }])
-  const pending = c.step([{ type: "!" }])
+  await c.step([{ move: { file: "scratch.ts" } }, { type: [alphabet, ""] }])
+  const pending = c.step([{ type: ["!", ""] }])
   // Past the pauses around moving into a new file (~1 s), and into the typing.
   await sleep(1500)
   const doc = await vscode.workspace.openTextDocument(file("scratch.ts"))
@@ -112,7 +112,7 @@ export async function run(): Promise<void> {
   }
   c.setSpeed(20)
   await tool("start", { task: "relay test" })
-  await tool("step", { actions: [{ say: "Hello from the relay." }, { move: { file: "relay.txt" } }, { type: "typed via the relay" }] })
+  await tool("step", { actions: [{ say: "Hello from the relay." }, { move: { file: "relay.txt" } }, { type: ["typed via the relay", ""] }] })
   const last = await tool("step", { actions: [] })
   assert.equal(last.batches[0]?.status, "completed")
   assert.equal(await buffer("relay.txt"), "typed via the relay")

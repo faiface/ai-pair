@@ -82,7 +82,7 @@ describe("relay", () => {
     expect(JSON.parse(started.text)).toEqual({ batches: [], events: [], turn: "agent" })
     expect(started.content[1]!.text).toContain("THE GUIDE")
 
-    const first = JSON.parse((await call(client, "step", { actions: [{ move: { file: "a.ts" } }, { type: "hi" }] })).text)
+    const first = JSON.parse((await call(client, "step", { actions: [{ move: { file: "a.ts" } }, { type: ["hi", ""] }] })).text)
     expect(first.submitted).toEqual({ id: 1, status: "playing" })
     const second = JSON.parse((await call(client, "step", { actions: [] })).text)
     expect(second.batches).toEqual([{ id: 1, status: "completed", played: 2 }])
@@ -103,11 +103,15 @@ describe("relay", () => {
     const bad = await call(client, "step", { actions: [{ typo: "x" }] })
     expect(bad.text).toMatch(/Not an action/)
     // Two actions in one object: zod would otherwise strip one of them silently.
-    const combined = await call(client, "step", { actions: [{ move: { position: "file_end" }, type: "x" }] })
+    const combined = await call(client, "step", { actions: [{ move: { to: "file_end" }, type: "x" }] })
     expect(combined.text).toMatch(/One action per object, got `move` and `type`/)
-    const extra = await call(client, "step", { actions: [{ move: { position: "file_end", txt: "x" } }] })
+    const extra = await call(client, "step", { actions: [{ move: { to: "file_end", txt: "x" } }] })
     expect(extra.error).toBe(true)
     expect(extra.text).toMatch(/txt/)
+    const half = await call(client, "step", { actions: [{ move: { before: "x" } }] })
+    expect(half.text).toMatch(/both `before` and `after`/)
+    const single = await call(client, "step", { actions: [{ type: "x" }] })
+    expect(single.error).toBe(true)
   })
 
   it("lets only one agent pair in a window at a time", async () => {

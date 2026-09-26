@@ -3,24 +3,36 @@
 export type Anchor = {
   text: string
   near_line?: number
-  direction?: "forward" | "backward"
 }
 
-export type Span = Anchor | { from: Anchor; to: Anchor }
+/** A single anchor's match, or from the start of `from` to the end of the first `to` after it. */
+export type Span = Anchor | { from: Anchor; to: { text: string } }
 
-export type MoveTarget = (Partial<Anchor> & { position?: "file_start" | "file_end" }) & {
+/** The offset between `before` and `after`, which occur together, exactly. */
+export type Spot = { before: string; after: string; near_line?: number }
+
+/** Where a `move` goes: one of a spot, `to`, or `lines`; with only `file`, the file's start. */
+export type MoveTarget = {
   file?: string
-  at?: "start" | "end"
+  /** A spot: see `Spot`. */
+  before?: string
+  after?: string
+  near_line?: number
+  /** `end`: the end of the cursor's line. */
+  to?: "end" | "file_start" | "file_end"
   /** Relative: this many lines down (negative: up) from the cursor, to the end of that line. */
   lines?: number
 }
+
+/** Typed as `before` then `after`, leaving the cursor between them. */
+export type TypeText = [before: string, after: string]
 
 export type Action =
   | { say: string }
   | { move: MoveTarget }
   | { select: Span }
-  | { type: string }
-  | { type_fast: string }
+  | { type: TypeText }
+  | { type_fast: TypeText }
   | { delete: true }
   | { point: Span & { file?: string } }
   | { run: string; wait?: number }
@@ -31,6 +43,20 @@ export const ACTION_KINDS = ["say", "move", "select", "type", "type_fast", "dele
 /** The action keys an object has; more than one means actions were combined by mistake. */
 export function actionKinds(value: object): string[] {
   return Object.keys(value).filter((k) => (ACTION_KINDS as readonly string[]).includes(k))
+}
+
+/** What's wrong with a `move`'s combination of fields, if anything. */
+export function moveProblem(m: MoveTarget): string | undefined {
+  const spot = m.before !== undefined || m.after !== undefined
+  if (spot && (m.before === undefined || m.after === undefined)) {
+    return "A spot needs both `before` and `after` (either may be empty)."
+  }
+  if (spot && m.before === "" && m.after === "") return "`before` and `after` can't both be empty."
+  if (m.near_line !== undefined && !spot) return "`near_line` only goes with `before` and `after`."
+  const targets = [spot && "`before`/`after`", m.to !== undefined && "`to`", m.lines !== undefined && "`lines`"].filter(Boolean)
+  if (targets.length > 1) return `Give one place to move to, not ${targets.join(" and ")}.`
+  if (targets.length === 0 && m.file === undefined) return "Give a place to move to: `before`/`after`, `to`, or `lines`."
+  return undefined
 }
 
 export type Turn = "agent" | "user"

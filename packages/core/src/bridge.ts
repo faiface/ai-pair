@@ -105,7 +105,7 @@ export class Bridge {
         } else if (m.protocolVersion !== PROTOCOL_VERSION) {
           send({
             type: "rejected",
-            reason: `Protocol version mismatch (editor ${PROTOCOL_VERSION}, relay ${m.protocolVersion}). Update the extension or the agent's MCP configuration.`,
+            reason: `Protocol version mismatch (editor ${PROTOCOL_VERSION}, relay ${m.protocolVersion}). The extension was updated: reload the VS Code window and restart the agent.`,
           })
           ws.close()
         } else {

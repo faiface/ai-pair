@@ -5,7 +5,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import type { Report, ToolErrorCode } from "./index"
 
-export const PROTOCOL_VERSION = 1
+export const PROTOCOL_VERSION = 2
 
 /** Written by each editor window to `<discoveryDir>/<pid>.json`. */
 export type Discovery = {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { resolveAnchor, resolveSpan } from "../src/anchors"
+import { resolveAnchor, resolveSpan, resolveSpot } from "../src/anchors"
 import { planTyping, readingTime } from "../src/typing"
 import { terminalText } from "../src/text"
 import { samePath, withinFolder, type PathStyle } from "../src/paths"
@@ -46,15 +46,15 @@ describe("anchors", () => {
   const text = "a = 1\nb = 1\nc = 1\n"
 
   it("resolves a unique match", () => {
-    expect(resolveAnchor(text, { text: "b = " }, 0)).toEqual({ ok: true, range: { start: 6, end: 10 } })
+    expect(resolveAnchor(text, { text: "b = " })).toEqual({ ok: true, range: { start: 6, end: 10 } })
   })
 
   it("reports a missing match", () => {
-    expect(resolveAnchor(text, { text: "d" }, 0)).toMatchObject({ ok: false, kind: "anchor_not_found" })
+    expect(resolveAnchor(text, { text: "d" })).toMatchObject({ ok: false, kind: "anchor_not_found" })
   })
 
   it("reports ambiguity with candidates", () => {
-    expect(resolveAnchor(text, { text: "1" }, 0)).toMatchObject({
+    expect(resolveAnchor(text, { text: "1" })).toMatchObject({
       ok: false,
       kind: "anchor_ambiguous",
       candidates: [
@@ -66,19 +66,19 @@ describe("anchors", () => {
   })
 
   it("breaks ties by the nearest line", () => {
-    expect(resolveAnchor(text, { text: "1", near_line: 3 }, 0)).toEqual({ ok: true, range: { start: 16, end: 17 } })
+    expect(resolveAnchor(text, { text: "1", near_line: 3 })).toEqual({ ok: true, range: { start: 16, end: 17 } })
   })
 
-  it("breaks ties by direction from the cursor", () => {
-    expect(resolveAnchor(text, { text: "1", direction: "forward" }, 5)).toEqual({ ok: true, range: { start: 10, end: 11 } })
-    expect(resolveAnchor(text, { text: "1", direction: "backward" }, 10)).toEqual({ ok: true, range: { start: 4, end: 5 } })
+  it("resolves a spot between two texts that occur together", () => {
+    expect(resolveSpot(text, { before: "b = ", after: "1" })).toEqual({ ok: true, range: { start: 10, end: 10 } })
+    expect(resolveSpot(text, { before: "", after: "c" })).toEqual({ ok: true, range: { start: 12, end: 12 } })
+    expect(resolveSpot(text, { before: " = ", after: "1" })).toMatchObject({ ok: false, kind: "anchor_ambiguous" })
+    expect(resolveSpot(text, { before: " = ", after: "1", near_line: 2 })).toEqual({ ok: true, range: { start: 10, end: 10 } })
   })
 
-  it("resolves a from/to span", () => {
-    expect(resolveSpan(text, { from: { text: "b" }, to: { text: "1", direction: "forward" } }, 0)).toEqual({
-      ok: true,
-      range: { start: 6, end: 11 },
-    })
+  it("resolves a from/to span, to the first match of `to` after `from`", () => {
+    expect(resolveSpan(text, { from: { text: "b" }, to: { text: "1" } })).toEqual({ ok: true, range: { start: 6, end: 11 } })
+    expect(resolveSpan(text, { from: { text: "c" }, to: { text: "b" } })).toMatchObject({ ok: false, kind: "anchor_not_found" })
   })
 })
 

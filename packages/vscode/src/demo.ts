@@ -7,10 +7,10 @@ import type { Controller } from "@ai-pair/core"
 import type { Action, Report } from "@ai-pair/protocol"
 
 const DIR = "ai-pair-demo/src"
-const SERVER = `${DIR}/server.ts`
-const TODOS = `${DIR}/todos.ts`
+export const SERVER = `${DIR}/server.ts`
+export const TODOS = `${DIR}/todos.ts`
 
-const INITIAL_SERVER = `import express from "express";
+export const INITIAL_SERVER = `import express from "express";
 
 const app = express();
 app.use(express.json());
@@ -18,10 +18,10 @@ app.use(express.json());
 app.listen(3000, () => console.log("Listening on http://localhost:3000"));
 `
 
-// Follows AGENT_GUIDE.md: make room before typing, delimiters before contents, and narrate
-// what, why, and how right before the code it's about.
-const SCRIPT: Action[][] = [
-  [{ say: "Let me look at how the app is set up first." }, { move: { file: SERVER, position: "file_start" } }],
+// Follows AGENT_GUIDE.md: make room before typing, both ends of a pair before its contents, and
+// narrate what, why, and how right before the code it's about.
+export const SCRIPT: Action[][] = [
+  [{ say: "Let me look at how the app is set up first." }, { move: { file: SERVER, to: "file_start" } }],
   [
     {
       say: "It's a single Express app in `server.ts`, with no database. I'll keep todos in memory for now, so we can focus on Express itself. Stop me if you'd prefer a real database.",
@@ -34,81 +34,62 @@ const SCRIPT: Action[][] = [
   ],
   [
     { say: "First, the shape of a todo: a type with an id, a title, and whether it's done." },
-    { move: { file: TODOS, position: "file_start" } },
-    { type: "export type Todo = {\n};\n" },
-    { move: { text: "Todo = {", direction: "backward" } },
-    { type: "\n  id: number;\n  title: string;\n  done: boolean;" },
+    { move: { file: TODOS, to: "file_start" } },
+    { type: ["export type Todo = {\n", "\n};\n"] },
+    { type: ["  id: number;\n  title: string;\n  done: boolean;", ""] },
   ],
   [
     { say: "The store is just an array and a counter for ids. `createTodo` is what the routes will call." },
-    { move: { position: "file_end" } },
-    { type: "\nconst todos: Todo[] = [];\nlet nextId = 1;\n\nexport function createTodo()" },
-    { move: { text: "createTodo(", direction: "backward" } },
-    { type: "title: string" },
-    { move: { text: ")", direction: "forward" } },
-    { type: ": Todo {\n}\n" },
-    { move: { text: "): Todo {", direction: "backward" } },
+    { move: { to: "file_end" } },
+    { type: ["\nconst todos: Todo[] = [];\nlet nextId = 1;\n\nexport function createTodo(", ")"] },
+    { type: ["title: string", ""] },
+    { move: { to: "end" } },
+    { type: [": Todo {\n", "\n}\n"] },
     { say: "It takes the next id, pushes the new todo onto the array, and returns it, so the route can send it straight back." },
-    { type: "\n  const todo = {}" },
-    { move: { text: "todo = {", direction: "backward" } },
-    { type: " id: nextId++, title, done: false " },
-    { move: { text: "}", direction: "forward" } },
-    { type: ";\n  todos.push()" },
-    { move: { text: "push(", direction: "backward" } },
-    { type: "todo" },
-    { move: { text: ")", direction: "forward" } },
-    { type: ";\n  return todo;" },
+    { type: ["  const todo = {", "};"] },
+    { type: [" id: nextId++, title, done: false ", ""] },
+    { move: { to: "end" } },
+    { type: ["\n  todos.push(", ");"] },
+    { type: ["todo", ""] },
+    { move: { to: "end" } },
+    { type: ["\n  return todo;", ""] },
   ],
   [
     {
       say: "Now the route. In Express, a route is an HTTP method, a path, and a handler that receives the request and the response.",
     },
-    { move: { file: SERVER, text: "app.use(express.json());" } },
-    { type: "\n\napp.post()" },
-    { move: { text: "app.post(", direction: "backward" } },
-    { type: '""' },
-    { move: { text: 'app.post("', direction: "backward" } },
-    { type: "/todos" },
-    { move: { text: '"', direction: "forward" } },
-    { type: ", ()" },
-    { move: { text: '"/todos", (', direction: "backward" } },
-    { type: "req, res" },
-    { move: { text: ")", direction: "forward" } },
-    { type: " => {\n}" },
-    { move: { text: "=> {", direction: "backward" } },
+    { move: { file: SERVER, before: "app.use(express.json());", after: "\n" } },
+    { type: ["\n\n", ""] },
+    { type: ["app.post(", ");"] },
+    { type: ['"', '"'] },
+    { type: ["/todos", ""] },
+    { move: { before: '"/todos"', after: ");" } },
+    { type: [", (", ")"] },
+    { type: ["req, res", ""] },
+    { move: { before: "(req, res)", after: ");" } },
+    { type: [" => {\n", "\n}"] },
   ],
   [
     { point: { text: "app.use(express.json());" } },
     { say: "`express.json()` up here is what parses the request body, so `req.body` is an object in our handler." },
     { say: "We create the todo from the body's `title`, and answer 201 Created with the new todo as JSON." },
-    { type: "\n  const todo = createTodo()" },
-    { move: { text: "createTodo(", direction: "backward" } },
-    { type: "req.body.title" },
-    { move: { text: ")", direction: "forward" } },
-    { type: ";\n  res.status()" },
-    { move: { text: "status(", direction: "backward" } },
-    { type: "201" },
-    { move: { text: ")", direction: "forward" } },
-    { type: ".json()" },
-    { move: { text: "json(", direction: "backward" } },
-    { type: "todo" },
-    { move: { text: ")", direction: "forward" } },
-    { type: ";" },
-    { move: { text: ")", direction: "forward" } },
-    { type: ";" },
+    { type: ["  const todo = createTodo(", ");"] },
+    { type: ["req.body.title", ""] },
+    { move: { to: "end" } },
+    { type: ["\n  res.status(", ")"] },
+    { type: ["201", ""] },
+    { move: { to: "end" } },
+    { type: [".json(", ");"] },
+    { type: ["todo", ""] },
   ],
   [
     { say: "We need to import `createTodo`." },
-    { move: { text: 'import express from "express";' } },
-    { type_fast: "\nimport {}" },
-    { move: { text: "import {", direction: "backward" } },
-    { type_fast: " createTodo " },
-    { move: { text: "}", direction: "forward" } },
-    { type_fast: ' from ""' },
-    { move: { text: 'from "', direction: "backward" } },
-    { type_fast: "./todos" },
-    { move: { text: '"', direction: "forward" } },
-    { type_fast: ";" },
+    { move: { before: 'import express from "express";', after: "\n" } },
+    { type_fast: ["\nimport { ", " }"] },
+    { type_fast: ["createTodo", ""] },
+    { move: { to: "end" } },
+    { type_fast: [' from "', '";'] },
+    { type_fast: ["./todos", ""] },
   ],
   [
     {
@@ -117,38 +98,29 @@ const SCRIPT: Action[][] = [
   ],
   [
     { say: "Next, listing todos. First a function in the store that hands out the array." },
-    { move: { file: TODOS, position: "file_end" } },
-    { type: "\nexport function listTodos(): Todo[] {\n}\n" },
-    { move: { text: "listTodos(): Todo[] {", direction: "backward" } },
-    { type: "\n  return todos;" },
+    { move: { file: TODOS, to: "file_end" } },
+    { type: ["\nexport function listTodos(): Todo[] {\n", "\n}\n"] },
+    { type: ["  return todos;", ""] },
   ],
   [
     { say: "And the route for it, right after the POST handler: `GET /todos` sends the list back as JSON." },
-    { move: { file: SERVER, text: "});" } },
-    { type: "\n\napp.get()" },
-    { move: { text: "app.get(", direction: "backward" } },
-    { type: '""' },
-    { move: { text: 'app.get("', direction: "backward" } },
-    { type: "/todos" },
-    { move: { text: '"', direction: "forward" } },
-    { type: ", ()" },
-    { move: { text: '"/todos", (', direction: "backward" } },
-    { type: "req, res" },
-    { move: { text: ")", direction: "forward" } },
-    { type: " => {\n}" },
-    { move: { text: "=> {", direction: "backward" } },
-    { type: "\n  res.json()" },
-    { move: { text: "res.json(", direction: "backward" } },
-    { type: "listTodos()" },
-    { move: { text: ")", direction: "forward" } },
-    { type: ";" },
-    { move: { text: ")", direction: "forward" } },
-    { type: ";" },
+    { move: { file: SERVER, before: "});", after: "\n" } },
+    { type: ["\n\n", ""] },
+    { type: ["app.get(", ");"] },
+    { type: ['"', '"'] },
+    { type: ["/todos", ""] },
+    { move: { before: 'get("/todos"', after: ");" } },
+    { type: [", (", ")"] },
+    { type: ["req, res", ""] },
+    { move: { before: 'get("/todos", (req, res)', after: ");" } },
+    { type: [" => {\n", "\n}"] },
+    { type: ["  res.json(", ");"] },
+    { type: ["listTodos()", ""] },
   ],
   [
     { say: "It needs the import too." },
-    { move: { text: "import { createTodo" } },
-    { type: ", listTodos" },
+    { move: { before: "import { createTodo", after: " }" } },
+    { type: [", listTodos", ""] },
   ],
 ]
 

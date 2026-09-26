@@ -1,6 +1,6 @@
 // Anchor resolution. See "Anchors" in PROTOCOL.md.
 
-import type { Anchor, Candidate, ErrorKind, Span } from "@ai-pair/protocol"
+import type { Anchor, Candidate, ErrorKind, Span, Spot } from "@ai-pair/protocol"
 import { lineText, position } from "./text"
 
 export type Range = { start: number; end: number }
@@ -27,8 +27,8 @@ function candidates(text: string, starts: number[]): Candidate[] {
   })
 }
 
-/** Resolves an anchor in `text`. `from` is the reference offset for `direction`. */
-export function resolveAnchor(text: string, anchor: Anchor, from: number): Resolution {
+/** Resolves an anchor in `text`: a unique match, or the one closest to `near_line`. */
+export function resolveAnchor(text: string, anchor: Anchor): Resolution {
   const starts = findAll(text, anchor.text)
   const range = (start: number): Resolution => ({
     ok: true,
@@ -39,18 +39,6 @@ export function resolveAnchor(text: string, anchor: Anchor, from: number): Resol
     return { ok: false, kind: "anchor_not_found", message: `Text not found: ${JSON.stringify(anchor.text)}` }
   }
   if (starts.length === 1) return range(starts[0]!)
-
-  if (anchor.direction !== undefined) {
-    const start =
-      anchor.direction === "forward" ? starts.find((s) => s >= from) : starts.findLast((s) => s < from)
-    if (start !== undefined) return range(start)
-    return {
-      ok: false,
-      kind: "anchor_not_found",
-      message: `No match ${anchor.direction} of the agent cursor for ${JSON.stringify(anchor.text)}`,
-      candidates: candidates(text, starts),
-    }
-  }
 
   if (anchor.near_line !== undefined) {
     const target = anchor.near_line
@@ -64,23 +52,27 @@ export function resolveAnchor(text: string, anchor: Anchor, from: number): Resol
   return {
     ok: false,
     kind: "anchor_ambiguous",
-    message: `${starts.length} matches for ${JSON.stringify(anchor.text)}; add near_line or direction`,
+    message: `${starts.length} matches for ${JSON.stringify(anchor.text)}; make it longer to be unique, or add near_line`,
     candidates: candidates(text, starts),
   }
 }
 
-/** Resolves a single anchor, or a from/to range (`to` is resolved relative to the end of `from`). */
-export function resolveSpan(text: string, span: Span, from: number): Resolution {
-  if (!("from" in span)) return resolveAnchor(text, span, from)
-  const start = resolveAnchor(text, span.from, from)
+/** Resolves a spot: the offset between `before` and `after`, which occur together. */
+export function resolveSpot(text: string, spot: Spot): Resolution {
+  const r = resolveAnchor(text, { text: spot.before + spot.after, near_line: spot.near_line })
+  if (!r.ok) return r
+  const at = r.range.start + spot.before.length
+  return { ok: true, range: { start: at, end: at } }
+}
+
+/** Resolves a single anchor, or a from/to range: `to` is its first match after `from`. */
+export function resolveSpan(text: string, span: Span): Resolution {
+  if (!("from" in span)) return resolveAnchor(text, span)
+  const start = resolveAnchor(text, span.from)
   if (!start.ok) return start
-  const end = resolveAnchor(text, span.to, start.range.end)
-  if (!end.ok) return end
-  return {
-    ok: true,
-    range: {
-      start: Math.min(start.range.start, end.range.start),
-      end: Math.max(start.range.end, end.range.end),
-    },
+  const end = span.to.text === "" ? -1 : text.indexOf(span.to.text, start.range.end)
+  if (end === -1) {
+    return { ok: false, kind: "anchor_not_found", message: `Text not found after \`from\`: ${JSON.stringify(span.to.text)}` }
   }
+  return { ok: true, range: { start: start.range.start, end: end + span.to.text.length } }
 }

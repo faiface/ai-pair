@@ -193,13 +193,13 @@ type FileContent = {
 ```ts
 type Action =
   | { say: string }
-  | { move: (Anchor | { position: "file_start" | "file_end" } | { lines: number })
-            & { file?: string, at?: "start" | "end" } }
-  | { select: Anchor | { from: Anchor, to: Anchor } }
-  | { type: string }
-  | { type_fast: string }
+  | { move: (Spot | { to: "end" | "file_start" | "file_end" } | { lines: number } | {})
+            & { file?: string } }
+  | { select: Span }
+  | { type: [before: string, after: string] }
+  | { type_fast: [before: string, after: string] }
   | { delete: true }
-  | { point: (Anchor | { from: Anchor, to: Anchor }) & { file?: string } }
+  | { point: Span & { file?: string } }
   | { run: string, wait?: number }
 ```
 
@@ -227,26 +227,41 @@ batches.
 ### `move`
 
 Moves the agent cursor. If `file` is given, switches to that file (opening it
-if needed, and creating it empty if it doesn't exist); otherwise anchors
-resolve in the current file. The cursor goes to
-the `start` or `end` of the anchor match (default: `end`, i.e. "after").
-Clears any selection. See [Anchors](#anchors).
+if needed, and creating it empty if it doesn't exist); otherwise the move is
+in the current file. Clears any selection. The cursor goes to one of:
 
-Instead of an anchor, `position: "file_start"` or `"file_end"` may be given, or
-`lines: n`: n lines down (negative: up) from the agent cursor, to the end of
-that line, like arrow keys. It's what the agent needs to step into space it
-has just made.
+- a **spot**: the place between `before` and `after`, two texts that occur
+  together, exactly (see [Anchors](#anchors)).
+  `{ before: "import { ", after: "type Context" }` lands right before
+  `type Context`.
+- `to: "end"`: the end of the cursor's line. It's how the agent steps past
+  the closing end of a pair it has filled.
+- `to: "file_start"` or `"file_end"`.
+- `lines: n`: n lines down (negative: up) from the agent cursor, to the end of
+  that line, like arrow keys.
+
+With only `file`, the cursor goes to the start of that file. Anything else,
+such as a spot with only `before`, or both a spot and `to`, is rejected.
 
 ### `select`
 
 Selects the anchor's match, or the range from the start of `from` to the end
-of `to`. Rendered as a visible agent selection. The cursor ends at the end of
-the selection.
+of the first match of `to` after it. Rendered as a visible agent selection.
+The cursor ends at the end of the selection.
 
 ### `type` and `type_fast`
 
-Types text at the agent cursor, replacing the selection if there is one. The
-cursor ends after the inserted text.
+Types `[before, after]` at the agent cursor, replacing the selection if there
+is one: first `before`, then `after`, then the cursor steps back to between
+them. It's how a pair is typed with both its ends before its contents:
+
+```jsonc
+{ "type": ["update(", ")"] }   // update(|)
+{ "type": ["ctx, dt", ""] }    // update(ctx, dt|)
+```
+
+The step back plays like a move nearby, with its pause. When `after` is
+empty, there's nothing to step back over, and no pause.
 
 - `type` is the default: for anything the programmer should read and
   understand. It plays at a human-like pace.
@@ -305,29 +320,37 @@ commands can still run in the background with the agent's native tools.
 
 ## Anchors
 
-An anchor identifies a location by **exact text**, with optional tie-breakers.
+Locations are identified by **exact text**. `select` and `point` take an
+anchor, the text itself; `move` takes a spot, the place between two texts.
 
 ```ts
 type Anchor = {
-  text: string                           // exact match, may span lines
-  near_line?: number                     // prefer the match closest to this line
-  direction?: "forward" | "backward"     // nearest match after/before the agent cursor
+  text: string                  // exact match, may span lines
+  near_line?: number            // tie-breaker: the match closest to this line
 }
+
+type Spot = {
+  before: string                // exact text right before the spot
+  after: string                 // exact text right after it; either may be empty, not both
+  near_line?: number
+}
+
+type Span = Anchor | { from: Anchor, to: { text: string } }  // `to`: its first match after `from`
 ```
 
 Resolution:
 
-1. Find all exact matches of `text` in the file.
+1. Find all exact matches of `text`, or of `before + after` together.
 2. Exactly one match: done.
-3. Several matches: if `direction` is given, pick the nearest match in that
-   direction from the agent cursor. Otherwise, if `near_line` is given, pick the
-   match closest to that line.
+3. Several matches: if `near_line` is given, pick the match closest to that
+   line.
 4. Otherwise the action fails with `anchor_not_found` or `anchor_ambiguous`,
-   listing candidates (line number plus a line of context) so the agent can
-   retry with a tie-breaker.
+   listing candidates (line number plus a line of context).
 
-Line numbers are poor addresses (the programmer's edits shift them) but good
-tie-breakers: a hint that is off by a few lines still selects the right match.
+The way to avoid ambiguity is a longer text: a whole line, or a spot with
+context on both sides. Line numbers are poor addresses (the programmer's edits
+shift them) but acceptable tie-breakers: a hint that is off by a few lines
+still selects the right match.
 
 ## Reports
 
@@ -467,14 +490,14 @@ experience (order of work, narration, background vs. visible work) is in
 ```jsonc
 // → step
 [{ "say": "Let's add the POST handler. Signature first." },
- { "move": { "file": "src/server.ts", "text": "app.use(express.json());\n" } },
- { "type": "\napp.post('/todos', async (req, res) => {\n" }]
+ { "move": { "file": "src/server.ts", "before": "app.use(express.json());", "after": "\n" } },
+ { "type": ["\n\napp.post('/todos', async (req, res) => {\n", "\n});"] }]
 // ← returns immediately
 { "batches": [], "submitted": { "id": 1, "status": "playing" }, "events": [], "turn": "agent", ... }
 
 // → step (blocks until batch 1 finishes)
 [{ "say": "We need a title from the body." },
- { "type": "  const { title } = req.body;\n" }]
+ { "type": ["  const title = req.body.title;", ""] }]
 // ←
 { "batches": [{ "id": 1, "status": "completed", "played": 3 }],
   "submitted": { "id": 2, "status": "playing" }, "events": [], ... }
@@ -488,14 +511,14 @@ experience (order of work, narration, background vs. visible work) is in
 // ← step returns immediately
 { "batches": [
     { "id": 2, "status": "interrupted", "played": 1,
-      "partial": { "index": 1, "typed": "  const { ti" } },
+      "partial": { "index": 1, "typed": "  const ti" } },
     { "id": 3, "status": "discarded", "played": 0,
-      "unplayed": [{ "say": "..." }, { "type": "..." }] }
+      "unplayed": [{ "say": "..." }, { "type": ["...", ""] }] }
   ],
   "events": [{ "kind": "message", "text": "use zod for validation" }], ... }
 
 // → step
-[{ "select": { "text": "  const { ti" } },
+[{ "select": { "text": "  const ti" } },
  { "say": "Good call. Let me define a schema instead." },
  { "delete": true }, ...]
 ```
