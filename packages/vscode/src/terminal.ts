@@ -3,7 +3,7 @@
 
 import * as path from "node:path"
 import * as vscode from "vscode"
-import { terminalText, type CommandOutcome, type RunOptions } from "@ai-pair/core"
+import { samePath, terminalText, type CommandOutcome, type RunOptions } from "@ai-pair/core"
 
 /** How long a new terminal gets to report shell integration before the command is just typed in. */
 const SHELL_INTEGRATION_MS = 5000
@@ -86,9 +86,10 @@ export class PairTerminals implements vscode.Disposable {
   }
 
   private acquire(cwd: string): Owned {
-    const idle = this.owned.find(
-      (o) => !o.busy && o.terminal.exitStatus === undefined && samePath(o.terminal.shellIntegration?.cwd?.fsPath ?? o.cwd, cwd),
-    )
+    const idle = this.owned.find((o) => {
+      const at = o.terminal.shellIntegration?.cwd?.fsPath ?? o.cwd
+      return !o.busy && o.terminal.exitStatus === undefined && samePath(path.resolve(at), path.resolve(cwd))
+    })
     if (idle) return idle
     const terminal = vscode.window.createTerminal({ name: "AI Pair", cwd, iconPath: new vscode.ThemeIcon("comment-discussion") })
     const owned: Owned = { terminal, cwd, busy: false }
@@ -136,14 +137,6 @@ function stopWaiting(ms: number, signal: AbortSignal, ended: Promise<void>): Pro
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-function samePath(a: string, b: string): boolean {
-  const norm = (p: string) => {
-    const r = path.resolve(p)
-    return process.platform === "win32" ? r.toLowerCase() : r
-  }
-  return norm(a) === norm(b)
 }
 
 /** Keeps the last `max` characters of a stream. */
