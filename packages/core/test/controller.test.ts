@@ -161,6 +161,19 @@ describe("editing", () => {
       { id: 2, status: "discarded", played: 0, unplayed: [{ type: "y" }] },
     ])
   })
+
+  it("fails an action that combines two, instead of playing only one of them", async () => {
+    const { editor, controller } = setup({ "a.ts": "x\n" })
+    await controller.start()
+    await controller.step([{ move: { file: "a.ts", position: "file_end" }, type: "y" } as Action])
+    const report = await until(controller.step([]))
+    expect(report.batches[0]).toMatchObject({
+      status: "failed",
+      played: 0,
+      error: { index: 0, kind: "invalid_action", message: expect.stringContaining("`move` and `type`") },
+    })
+    expect(editor.text("a.ts")).toBe("x\n")
+  })
 })
 
 describe("interruptions", () => {

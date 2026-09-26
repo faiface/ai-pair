@@ -203,6 +203,10 @@ type Action =
   | { run: string, wait?: number }
 ```
 
+Each action is an object with exactly one of these keys. Anything else is
+rejected, including two actions in one object (`{ move: …, type: … }`): they
+are separate actions, played in order.
+
 Each editing action (`type`, `type_fast`, `delete`) is **one undo stop** in the
 programmer's undo stack, not one per character. If the programmer undoes an
 agent action, that is an edit like any other (and interrupts).

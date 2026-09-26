@@ -101,7 +101,13 @@ describe("relay", () => {
     const client = await connect()
     await call(client, "start")
     const bad = await call(client, "step", { actions: [{ typo: "x" }] })
-    expect(bad.error).toBe(true)
+    expect(bad.text).toMatch(/Not an action/)
+    // Two actions in one object: zod would otherwise strip one of them silently.
+    const combined = await call(client, "step", { actions: [{ move: { position: "file_end" }, type: "x" }] })
+    expect(combined.text).toMatch(/One action per object, got `move` and `type`/)
+    const extra = await call(client, "step", { actions: [{ move: { position: "file_end", txt: "x" } }] })
+    expect(extra.error).toBe(true)
+    expect(extra.text).toMatch(/txt/)
   })
 
   it("lets only one agent pair in a window at a time", async () => {

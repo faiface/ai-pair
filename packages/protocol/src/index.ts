@@ -25,6 +25,14 @@ export type Action =
   | { point: Span & { file?: string } }
   | { run: string; wait?: number }
 
+/** The keys that name an action. An action object has exactly one of them. */
+export const ACTION_KINDS = ["say", "move", "select", "type", "type_fast", "delete", "point", "run"] as const
+
+/** The action keys an object has; more than one means actions were combined by mistake. */
+export function actionKinds(value: object): string[] {
+  return Object.keys(value).filter((k) => (ACTION_KINDS as readonly string[]).includes(k))
+}
+
 export type Turn = "agent" | "user"
 
 export type BatchStatus = "completed" | "interrupted" | "failed" | "discarded"

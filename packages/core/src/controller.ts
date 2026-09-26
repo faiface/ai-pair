@@ -16,7 +16,7 @@ import type {
   Turn,
 } from "@ai-pair/protocol"
 import * as nodePath from "node:path"
-import { ToolError } from "@ai-pair/protocol"
+import { actionKinds, ToolError } from "@ai-pair/protocol"
 import { resolveAnchor, resolveSpan, type Resolution } from "./anchors"
 import { fileDiff } from "./diff"
 import type { AgentState, Change, CursorView, EditorPort, PanelPort, Ref, SharedSelection } from "./ports"
@@ -641,6 +641,10 @@ export class Controller {
 
   private async perform(s: Session, action: Action, playing: Playing): Promise<Outcome> {
     const { touched } = playing
+    const kinds = actionKinds(action)
+    if (kinds.length > 1) {
+      return fail("invalid_action", `One action per object, got ${kinds.map((k) => `\`${k}\``).join(" and ")}: make them separate actions, in order.`)
+    }
     if (s.turn === "user" && !("say" in action) && !("point" in action)) {
       return fail("not_your_turn", "During the programmer's turn, only `say` and `point` are allowed.")
     }
