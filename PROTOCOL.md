@@ -238,8 +238,7 @@ in the current file. Clears any selection. The cursor goes to one of:
   together, exactly (see [Anchors](#anchors)).
   `{ before: "import { ", after: "type Context" }` lands right before
   `type Context`.
-- `to: "end"`: the end of the cursor's line. It's how the agent steps past
-  the closing end of a pair it has filled.
+- `to: "end"`: the end of the cursor's line.
 - `to: "file_start"` or `"file_end"`.
 - `lines: n`: n lines down (negative: up) from the agent cursor, to the end of
   that line, like arrow keys.

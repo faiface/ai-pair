@@ -40,7 +40,7 @@ const Action = z.union([
         to: z
           .enum(["end", "file_start", "file_end"])
           .optional()
-          .describe("Instead of a spot. `end`: the end of your cursor's line, to step past what closes a pair you've filled."),
+          .describe("Instead of a spot. `end`: the end of your cursor's line."),
         lines: z
           .number()
           .int()
@@ -64,7 +64,7 @@ const Action = z.union([
   }),
   action({
     type: typeText.describe(
-      "`[before, after]`: types `before`, then `after`, at a human pace, then steps your cursor back to between them, ready for what goes inside. Replaces the selection if there is one. Inserted literally: include newlines and indentation yourself; nothing is auto-closed. The default for anything the programmer should read. Every pair is typed with both its ends first, then filled from inside: `[\"update(\", \")\"]` then `[\"ctx, dt\", \"\"]`; `[\"for (\", \") {\\n}\"]` then the condition, then `move: { to: \"end\" }` and the body; `[\"'\", \"'\"]` then the string's text; `[\"[\", \"]\"]`; `[\"/* \", \" */\"]`. That goes for every block, object, array, index, call, parameter list, header, string, tag and block comment, however short, in boilerplate and config too. Fill a pair right after typing it, before anything else. `after` is `\"\"` only when the text opens nothing that needs closing. Make room before you write: at the end of a line, `[\"\\n\\n\", \"\\n\"]` opens an empty line between blank ones, with the cursor on it. Never type in front of existing text on the same line.",
+      "`[before, after]`: types `before`, then `after`, at a human pace, then steps your cursor back to between them, ready for what goes inside. Replaces the selection if there is one. Inserted literally: include newlines and indentation yourself; nothing is auto-closed. The default for anything the programmer should read. Every pair is typed with both its ends first, then filled from inside: `[\"update(\", \")\"]` then `[\"ctx, dt\", \"\"]`; `[\"for (\", \") {\\n}\"]` then the condition, then `move: { to: \"end\" }` and the body; `[\"'\", \"'\"]` then the string's text; `[\"[\", \"]\"]`; `[\"/* \", \" */\"]`. That goes for every block, object, array, index, call, parameter list, header, string, tag and block comment, however short, in boilerplate and config too. Fill a pair right after typing it, before anything else, then step past its closing part: `to: \"end\"` if it ends your line, `lines: 1` if it's on the line below. `after` is `\"\"` only when the text opens nothing that needs closing. Make room before you write: at the end of a line, `[\"\\n\\n\", \"\\n\"]` opens an empty line between blank ones, with the cursor on it. Never type in front of existing text on the same line.",
     ),
   }),
   action({

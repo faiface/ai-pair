@@ -164,10 +164,11 @@ The programmer watches every keystroke, so type the way a person would.
   or `= []`. Nested pairs are built outside in: `["return {\n", "\n};"]`,
   then the fields inside it, each nested pair of theirs again typed empty and
   then filled.
-- **Fill a pair right after typing it**, then step past its closing end:
-  `move: { to: "end" }` when the rest of the line is only closers (`)`, `);`,
-  `) {`), or a spot right after it when more goes on the line. Never type on
-  past an empty pair and come back to it later; that reads as jumping around.
+- **Fill a pair right after typing it**, then step past its closing part:
+  `move: { to: "end" }` if it ends your line, `move: { lines: 1 }` if it's on
+  the line below (a block, a multi-line object), or a spot if more code
+  follows it on your line. Never type on past an empty pair and come back to
+  it later; that reads as jumping around.
 - **Never type in front of existing text** on the same line: everything after
   your cursor would be pushed along as you type. To add a line or a block, go
   to the *end* of the line before it.
@@ -202,6 +203,7 @@ type   ["    x: 0,\n    ball: { ", " },"]     the first field; the nested pair, 
 type   ["x: 0, y: 0", ""]                     its contents, right away
 move   to: "end"                              past " },"
 type   ["\n    bricks: [],", ""]              only now the next field; an empty pair typed whole
+move   lines: 1                               past "};", on the line below
 ```
 
 A call, then the line after it:
@@ -293,7 +295,7 @@ type_fast ["./todos", ""]                      its text
   next batch is discarded. Use a whole line, or a spot with context on both
   sides: `before: "import { ", after: "type Context"`. `near_line` is only a
   tie-breaker. Most moves within a line don't need an anchor at all: `type`
-  leaves you inside the pair, and `move: { to: "end" }` steps past it.
+  leaves you inside the pair, and `to: "end"` or `lines: 1` steps past it.
 - **The buffer is the truth.** Use `read` for files the programmer may have
   touched; the editor may differ from disk.
 
