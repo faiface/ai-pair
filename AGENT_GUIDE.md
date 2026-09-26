@@ -169,19 +169,39 @@ The programmer watches every keystroke, so type the way a person would.
   the line below (a block, a multi-line object), or a spot if more code
   follows it on your line. Never type on past an empty pair and come back to
   it later; that reads as jumping around.
-- **Never type in front of existing text** on the same line: everything after
-  your cursor would be pushed along as you type. To add a line or a block, go
-  to the *end* of the line before it.
-- **Make all the room first.** Before typing a block, create the empty lines
-  around it, including the blank line that will separate it from the code
-  below. At the end of the line before it, `["\n\n", "\n"]` makes an empty
-  line between two blank ones, with your cursor on it; if a blank line
-  already follows, `["\n\n", ""]` is enough. The code below should move down
-  to make space before you write, not get a blank line after you're done.
+- **Type new lines into an empty line.** Before typing a new line of code,
+  make an empty line for it, then type into that. If you start typing where
+  code follows on the same line, that code slides right with every character,
+  then jumps down at the newline: a bad experience for the programmer
+  watching. To make the empty line:
+  - below a line: at its end, `["\n", ""]`;
+  - above a line: at the start of its text, `["", "\n    "]` with the line's
+    indentation. The line moves down whole, and you're on the empty line
+    above it.
+
+  Typing within a line, like a pair's contents or an argument, is fine.
+- **Add the blank line below a block before typing the block.** If the block
+  will be separated from the code below it by a blank line, make that blank
+  line together with the empty line you type into:
+  - below a line: at its end, `["\n\n", "\n"]`, an empty line between two
+    blank ones (`["\n\n", ""]` if a blank line already follows);
+  - above a line: at the start of its text, `["", "\n\n    "]`.
+
+  The code below moves down once, before you start, instead of getting a
+  blank line pushed in after you're done.
 - **After an interruption, close what's open first.** If a batch stopped
   partway through a `type`, the report's code shows what's on screen, and
   what's left of the `type` comes first in what didn't play; your first edit
   is to close every pair it left open.
+
+A statement before a `return`:
+
+```
+move   before: "", after: "return total;"     the start of the return's text
+type   ["", "\n  "]                           the return moves down; you're on the empty line above it
+type   ["const total = sum(", ");"]
+type   ["items", ""]
+```
 
 Adding a function between two others, separated by a blank line:
 
@@ -336,7 +356,8 @@ type_fast ["./todos", ""]                      its text
 - Hopping between files every few lines.
 - Reading the code aloud instead of explaining it.
 - Talking about code before pointing at it.
-- Typing in front of existing text, pushing it along.
+- Typing a new line where code follows on the same line, so it slides right
+  as you type.
 - Typing a block top to bottom, with its closing brace last.
 - Typing an object, array, index, record, call, string, block comment or
   `for`/`if` header left to right in one go, with its closing bracket, quote
@@ -444,7 +465,7 @@ say    "Let me start the server and send a request."
 say    "It answered 201 with the new todo, id 1. Creating works."
 ```
 
-*Makes room at the end of a line, never in front of existing text. Steps past
+*Makes an empty line before typing a new one into it. Steps past
 a closing quote with a spot, since more follows on its line, and past closers
 at the end of a line with `to: "end"`. Jumps back to add the import when it's
 needed, the way a human would. Runs the code and says what happened:
