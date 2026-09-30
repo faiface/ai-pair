@@ -155,6 +155,26 @@
         }
       },
       {
+        "id": "aiPair.cursorForeground",
+        "description": "Text on the agent cursor's name label.",
+        "defaults": {
+          "dark": "#1B1B1B",
+          "light": "#FFFFFF",
+          "highContrast": "#000000",
+          "highContrastLight": "#FFFFFF"
+        }
+      },
+      {
+        "id": "aiPair.cursorReadForeground",
+        "description": "Text on the agent cursor's name label while it waits for you to read its message.",
+        "defaults": {
+          "dark": "#1B1B1B",
+          "light": "#1B1B1B",
+          "highContrast": "#000000",
+          "highContrastLight": "#FFFFFF"
+        }
+      },
+      {
         "id": "aiPair.selectionBackground",
         "description": "Background of the agent's selection.",
         "defaults": {

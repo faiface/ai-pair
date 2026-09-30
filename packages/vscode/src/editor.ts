@@ -43,17 +43,20 @@ function cursorDecoration(color: string, style: string, opacity: number) {
   })
 }
 
-function labelDecoration(text: string, color: string, opacity: number) {
+/** `color` and `foreground`: the label's background and its text, a pair of theme colors. */
+function labelDecoration(text: string, color: string, foreground: string, opacity: number) {
   return vscode.window.createTextEditorDecorationType({
     before: {
       contentText: text,
-      textDecoration: `none; position: absolute; transform: translateY(-105%); z-index: 10; pointer-events: none; padding: 0 4px; border-radius: 3px; font-size: 0.75em; line-height: 1.35; white-space: nowrap; background-color: ${color}; color: #1b1b1b; opacity: ${opacity};`,
+      textDecoration: `none; position: absolute; transform: translateY(-105%); z-index: 10; pointer-events: none; padding: 0 4px; border-radius: 3px; font-size: 0.75em; line-height: 1.35; white-space: nowrap; background-color: ${color}; color: ${foreground}; opacity: ${opacity};`,
     },
   })
 }
 
 const CURSOR = "var(--vscode-aiPair-cursor)"
 const READ = "var(--vscode-aiPair-cursorRead)"
+const CURSOR_TEXT = "var(--vscode-aiPair-cursorForeground)"
+const READ_TEXT = "var(--vscode-aiPair-cursorReadForeground)"
 
 export class VsCodeEditor implements EditorPort, vscode.Disposable {
   controller?: Controller
@@ -123,14 +126,14 @@ export class VsCodeEditor implements EditorPort, vscode.Disposable {
   setAgentName(name: string): void {
     for (const t of Object.values(this.labelTypes)) t.dispose()
     this.labelTypes = {
-      typing: labelDecoration(name, CURSOR, 1),
-      read: labelDecoration(name, READ, 1),
-      readDim: labelDecoration(name, CURSOR, 1),
-      thinking: labelDecoration(name, CURSOR, 0.6),
-      running: labelDecoration(`${name} · running`, CURSOR, 0.8),
-      paused: labelDecoration(`${name} · paused`, CURSOR, 0.8),
-      listening: labelDecoration(`${name} · listening`, CURSOR, 0.8),
-      navigator: labelDecoration(`${name} · your turn`, CURSOR, 0.8),
+      typing: labelDecoration(name, CURSOR, CURSOR_TEXT, 1),
+      read: labelDecoration(name, READ, READ_TEXT, 1),
+      readDim: labelDecoration(name, CURSOR, CURSOR_TEXT, 1),
+      thinking: labelDecoration(name, CURSOR, CURSOR_TEXT, 0.6),
+      running: labelDecoration(`${name} · running`, CURSOR, CURSOR_TEXT, 0.8),
+      paused: labelDecoration(`${name} · paused`, CURSOR, CURSOR_TEXT, 0.8),
+      listening: labelDecoration(`${name} · listening`, CURSOR, CURSOR_TEXT, 0.8),
+      navigator: labelDecoration(`${name} · your turn`, CURSOR, CURSOR_TEXT, 0.8),
     }
     this.redraw()
   }

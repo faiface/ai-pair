@@ -30,6 +30,11 @@ narration panel. Decorations can't animate, so the pulse is done by swapping
 decoration types on a timer.
 
 Colors are contributed as theme colors, so themes and users can override them.
+The agent's color and the read color differ clearly in every kind of theme, so
+the pulse is visible, and so is the difference between a selection and a
+`point`. The name label's text has its own pair of colors, one for each
+color the label takes, like a badge's foreground: dark on the bright colors of
+dark themes, white on light themes' deeper orange.
 
 ## Narration panel
 
