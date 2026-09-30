@@ -149,9 +149,9 @@
         "description": "The agent's cursor while it waits for you to read its message.",
         "defaults": {
           "dark": "#FACC15",
-          "light": "#B45309",
+          "light": "#B7791F",
           "highContrast": "#FFE14D",
-          "highContrastLight": "#92400E"
+          "highContrastLight": "#7A5C00"
         }
       },
       {
@@ -169,9 +169,9 @@
         "description": "Background of code the agent is pointing at.",
         "defaults": {
           "dark": "#FACC1526",
-          "light": "#B4530920",
+          "light": "#B7791F20",
           "highContrast": "#FFE14D40",
-          "highContrastLight": "#92400E30"
+          "highContrastLight": "#7A5C0030"
         }
       },
       {
@@ -179,9 +179,9 @@
         "description": "Border of code the agent is pointing at.",
         "defaults": {
           "dark": "#FACC1599",
-          "light": "#B4530999",
+          "light": "#B7791F99",
           "highContrast": "#FFE14D",
-          "highContrastLight": "#92400E"
+          "highContrastLight": "#7A5C00"
         }
       }
     ]
