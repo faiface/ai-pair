@@ -50,6 +50,21 @@ app.listen(3000, () => console.log("Listening on http://localhost:3000"));
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+/**
+ * Inserts text as the programmer would, while the agent may be typing into the same document. VS Code
+ * rejects an extension's edit made against a version the document has moved past, which the agent's
+ * next keystroke may do at any moment; the programmer typing would simply go through, so try again.
+ */
+async function insertAsProgrammer(uri: vscode.Uri, position: vscode.Position, text: string): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const edit = new vscode.WorkspaceEdit()
+    edit.insert(uri, position, text)
+    if (await vscode.workspace.applyEdit(edit)) return
+    await sleep(5)
+  }
+  assert.fail("VS Code kept rejecting the programmer's edit")
+}
+
 export async function run(): Promise<void> {
   const ext = vscode.extensions.getExtension("ai-pair.ai-pair")
   assert.ok(ext, "extension not found")
@@ -111,9 +126,7 @@ export async function run(): Promise<void> {
   // Past the pauses around moving into a new file (~1 s), and into the typing.
   await sleep(1500)
   const doc = await vscode.workspace.openTextDocument(file("scratch.ts"))
-  const edit = new vscode.WorkspaceEdit()
-  edit.insert(doc.uri, new vscode.Position(0, 0), "// mine\n")
-  await vscode.workspace.applyEdit(edit)
+  await insertAsProgrammer(doc.uri, new vscode.Position(0, 0), "// mine\n")
 
   const report = await pending
   const [typing, next] = report.batches
