@@ -108,6 +108,25 @@ export function displayPath(editor: EditorPort, root: string | undefined, file: 
   return rel.startsWith("..") || nodePath.isAbsolute(rel) ? file : rel
 }
 
+function mapThrough(change: Change): (pos: number) => number {
+  return (pos) => {
+    if (pos <= change.offset) return pos
+    if (pos >= change.offset + change.deleteLength) return pos + change.text.length - change.deleteLength
+    return change.offset + change.text.length
+  }
+}
+
+/** Keeps a scene's cursor, selection and pointed code in place through a change to `file`. */
+export function transformScene(s: Scene, file: string, change: Change): void {
+  const map = mapThrough(change)
+  // In place: typing holds this cursor object.
+  if (s.cursor?.file === file) s.cursor.offset = map(s.cursor.offset)
+  if (s.cursor?.file === file && s.selection) {
+    s.selection = { start: map(s.selection.start), end: map(s.selection.end) }
+  }
+  if (s.point?.file === file) s.point = { file, start: map(s.point.start), end: map(s.point.end) }
+}
+
 export class Player {
   /** In a reading pause, or waiting for the programmer to allow a command. */
   reading = false
@@ -186,18 +205,9 @@ export class Player {
   }
 
   /** Keeps the positions playback holds in place through a change someone else made. */
-  transform(file: string, change: { offset: number; deleteLength: number; text: string }): void {
-    const s = this.scene
-    const map = (pos: number): number => {
-      if (pos <= change.offset) return pos
-      if (pos >= change.offset + change.deleteLength) return pos + change.text.length - change.deleteLength
-      return change.offset + change.text.length
-    }
-    if (s.cursor?.file === file) s.cursor.offset = map(s.cursor.offset)
-    if (s.cursor?.file === file && s.selection) {
-      s.selection = { start: map(s.selection.start), end: map(s.selection.end) }
-    }
-    if (s.point?.file === file) s.point = { file, start: map(s.point.start), end: map(s.point.end) }
+  transform(file: string, change: Change): void {
+    transformScene(this.scene, file, change)
+    const map = mapThrough(change)
     const span = this.playing?.span
     if (span?.file === file) this.playing!.span = { file, start: map(span.start), end: map(span.end) }
   }

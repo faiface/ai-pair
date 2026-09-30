@@ -7,7 +7,7 @@ import { fileDiff } from "./diff"
 import { LineIds, type Sighting } from "./lines"
 import { agentPath, displayPath, Player, type Scene } from "./player"
 import type { AgentState, Change, CursorView, EditorPort, PanelPort, Ref, SharedSelection } from "./ports"
-import { rehearse, type Rehearsal } from "./rehearsal"
+import { followChange, rehearse, type Rehearsal } from "./rehearsal"
 import { fileLines } from "./text"
 import { Timeline } from "./timeline"
 import { defaultTiming, withOverrides, type Timing, type TimingOverrides } from "./timing"
@@ -285,12 +285,14 @@ export class Controller {
   /**
    * A change the programmer didn't make: by a tool, a formatter, or on disk. It interrupts if the
    * playing or queued batches edit the file, since they were planned against the text before it.
-   * Otherwise it's just reported.
+   * Otherwise it's just reported, and the queued rehearsals follow it.
    */
   otherEdit(file: string, before: string, after: string, changes: Change[]): void {
     const s = this.activeSession()
     if (!s) return
-    const planned = s.queue.at(-1)?.after?.texts.has(file) ?? false
+    const planned = s.queue.some((b) => b.after?.edits.has(file))
+    // Before recordEdit moves the editor's line identities, which the rehearsals' start from.
+    if (!planned) for (const b of s.queue) if (b.after) followChange(b.after, file, before, after, changes)
     this.recordEdit(s, file, before, after, changes, "other")
     if (planned) {
       const e = s.events.find((e): e is EditEvent => e.kind === "edit" && e.file === file && e.diff === undefined)
@@ -453,7 +455,7 @@ export class Controller {
 
   /** Plays a batch in memory, from where the queued batches leave off, or the editor as it is. */
   private rehearse(s: Session, actions: Action[]): ReturnType<typeof rehearse> {
-    const from = s.queue.at(-1)?.after ?? { scene: s.scene, texts: new Map(), lines: s.lines }
+    const from = s.queue.at(-1)?.after ?? { scene: s.scene, texts: new Map(), lines: s.lines, edits: new Set<string>() }
     return rehearse(this.editor, this.config, from, actions, (file, line, id) => s.seen.get(file)?.get(line) === id)
   }
 

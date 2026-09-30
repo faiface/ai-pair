@@ -5,12 +5,12 @@
 import type { Action, BatchResult } from "@ai-pair/protocol"
 import type { Config } from "./controller"
 import type { LineIds, Sighting } from "./lines"
-import { Player, type Scene } from "./player"
-import type { CommandOutcome, EditorPort, PanelPort } from "./ports"
+import { Player, transformScene, type Scene } from "./player"
+import type { Change, CommandOutcome, EditorPort, PanelPort } from "./ports"
 import { instant } from "./timeline"
 
-/** What playing batches leaves behind: the scene, the text of each file they edited, and its lines. */
-export type Rehearsal = { scene: Scene; texts: Map<string, string>; lines: LineIds }
+/** What playing batches leaves behind: the scene, the text of each file they edited, and its lines. `edits`: this batch's own. */
+export type Rehearsal = { scene: Scene; texts: Map<string, string>; lines: LineIds; edits: Set<string> }
 
 /**
  * Plays `actions` in memory, starting from `from`. Commands don't run, and succeed; a `move` goes
@@ -44,13 +44,25 @@ export async function rehearse(
     knows,
   })
   const { result, sightings } = await player.play(0, actions)
-  return { result, sightings, after: { scene, texts: memory.texts, lines } }
+  return { result, sightings, after: { scene, texts: memory.texts, lines, edits: memory.edits } }
+}
+
+/** Follows a change by others to a file no queued batch edits, so its rehearsed text is the editor's. */
+export function followChange(r: Rehearsal, file: string, before: string, after: string, changes: Change[]): void {
+  r.lines.of(file, before)
+  for (const change of changes) {
+    transformScene(r.scene, file, change)
+    r.lines.apply(file, change)
+  }
+  if (r.texts.has(file)) r.texts.set(file, after)
 }
 
 const silent: PanelPort = { post: () => {} }
 
 /** A copy of the editor: files it has edited are its own, the rest are read from the real one. */
 class MemoryEditor implements EditorPort {
+  readonly edits = new Set<string>()
+
   constructor(
     private readonly real: EditorPort,
     readonly texts: Map<string, string>,
@@ -94,6 +106,7 @@ class MemoryEditor implements EditorPort {
   async edit(file: string, offset: number, deleteLength: number, text: string): Promise<void> {
     const old = await this.getText(file)
     this.texts.set(file, old.slice(0, offset) + text + old.slice(offset + deleteLength))
+    this.edits.add(file)
   }
 
   async save(): Promise<void> {}
