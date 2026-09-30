@@ -40,35 +40,56 @@ highly visible and nothing in the panel may move unexpectedly.
 
 Layout, top to bottom:
 
-1. **The band**, a full-width area in a lighter background, holding everything
-   about now:
+1. **The band**, a full-width area on the editor's background, holding
+   everything about now:
    - **Its header**: the agent's state (a colored dot and a few words: *Agent
-     is typing*, *Read this*, *Needs you*, *Your turn · navigating*), and the
-     controls, compact and quiet: Pause/Resume, Interrupt, My turn / Hand
-     back, the speed, End. During the programmer's turn, Pause and Interrupt
-     give way to Hand back. The speed opens a menu of 0.4× to 3.0×.
-   - **The current message**, in large text (≈1.45× the editor font,
+     is typing*, *Read this*, *Needs you*, *Your turn*), and the controls,
+     compact and quiet, as icons without fills: Pause/Resume, Interrupt, My
+     turn, the speed, End. During the programmer's turn, Pause and Interrupt
+     give way to Hand back, the one labeled control, since it's the main
+     action then. The speed opens a menu of 0.4× to 3.0×. The agent's color
+     is on the dot only, never on the controls.
+   - **The current message**, in large text (≈1.3× the editor font,
      *tunable*), high contrast. Its **top edge is fixed**, right under the
      header; its height grows downward with the message length. A new message
-     briefly flashes the band, in sync with the cursor's read state. The code
-     the agent pointed at before it is linked under it.
-   - **The reading-pause bar** under the message. It fills during the reading
-     pause, so the pause feels intentional, and is hidden otherwise.
+     fades in, in sync with the cursor's read state. The code the agent
+     pointed at before it is linked under it.
+   - **The reading pause** fills a thin ring around the status dot, so the
+     pause feels intentional, while the dot takes the read color. The ring's
+     rest is the same color, faded. Otherwise
+     the dot shows no ring. In the read state after it, the dot breathes
+     slowly. One cue, in one place, right above the message: no flash, no bar.
    - **A command to allow**, when the agent plays a `run` (see Commands).
    - **The reply box**, under the message. It's where the eye goes after
      reading, which is when the programmer replies. The band has room for
      two lines of message, so the reply box moves only for a longer one.
 2. **History**, below the band, newest first. The agent's messages in muted
-   text; the programmer's replies as bubbles on the right; commands as
-   terminal rows with their outcome (✓ exit 0, ✕ exit 1, skipped, still
-   running, which changes to how it ended when it does); turn changes,
-   interrupts and session starts and ends as dividers.
+   text; the programmer's replies as neutral bubbles on the right; commands
+   as soft terminal rows with their outcome (✓ exit 0, ✕ exit 1, skipped,
+   still running, which changes to how it ended when it does); turn changes,
+   interrupts and session starts and ends as faint dividers.
 
-Without a session, the band says so and how to start one, and after a
-session, how it ended, with the agent's summary; the controls and the reply
-box are hidden. In every message, code spans that name a file (`game.ts`,
+Without a session, the band has no header: it says there's no session and
+how to start one, and after a session, how it ended, with the agent's
+summary. In every message, code spans that name a file (`game.ts`,
 `src/server.ts`) open it, found by name if it isn't a path from the
-workspace's root, and URLs open in the browser.
+workspace's root, and URLs open in the browser. File and code references are
+mono and quietly underlined, taking the link color only on hover.
+
+**The panel follows whatever theme is set**, today's or a future one, without
+knowing any theme. Every color is one of the theme's tokens (the editor's and
+side bar's backgrounds, its buttons, inputs, links and borders), or the
+theme's foreground mixed into what's behind it: muted text, hairlines, soft
+fills and code are the foreground at fixed strengths, so they recede the same
+way on a dark theme and a light one. It doesn't rely on how a theme relates
+its tokens: the editor's background may be lighter, darker or the same as the
+side bar's (the band's hairline marks it either way), and some themes set
+`descriptionForeground` to the foreground. High contrast themes get text at
+full strength and their contrast border in place of hairlines. The controls
+are the theme's too: icon buttons hover like its toolbar icons, and Run and
+Allow for session are its primary and secondary buttons, with their hover
+colors and borders. The agent's colors are theme colors too (see Agent
+cursor).
 
 Behavior:
 
@@ -97,8 +118,8 @@ Behavior:
   End); Enter still does.
 - The command *AI Pair: Reply to the Agent* focuses the reply box from the
   editor; bind it to a key of your choice.
-- During the programmer's turn the band's header says *Your turn ·
-  navigating*; the agent's comments appear as the current message as usual.
+- During the programmer's turn the band's header says *Your turn*, and the
+  agent navigates: its comments appear as the current message as usual.
 
 ## Playback
 
