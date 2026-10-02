@@ -6,9 +6,13 @@ import ai.pair.settings.PairSettings
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import com.google.gson.JsonPrimitive
+import com.intellij.ide.ui.LafManagerListener
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.components.service
+import com.intellij.openapi.editor.colors.EditorColorsListener
 import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.project.Project
@@ -34,6 +38,15 @@ class NarrationPanel(private val project: Project, private val host: PairHost) :
     private var page: String? = null
     private var browser: JBCefBrowser? = null
     private var query: JBCefJSQuery? = null
+
+    init {
+        // Like VS Code's webviews, the page is restyled in place, so a half-typed reply and the scroll survive.
+        // The UI theme and the editor scheme (colours, and Settings | Editor | Font) change separately.
+        ApplicationManager.getApplication().messageBus.connect(this).apply {
+            subscribe(LafManagerListener.TOPIC, LafManagerListener { retheme() })
+            subscribe(EditorColorsManager.TOPIC, EditorColorsListener { retheme() })
+        }
+    }
 
     fun component(): JComponent {
         if (!JBCefApp.isSupported()) return JBLabel("AI Pair needs JCEF, which this IDE doesn't support.")
@@ -81,9 +94,15 @@ class NarrationPanel(private val project: Project, private val host: PairHost) :
         val html = page ?: return
         val bridge = "const vscode = { postMessage: (m) => { const s = JSON.stringify(m); ${query.inject("s")} } };"
         browser.loadHTML(
-            html.replace("const vscode = acquireVsCodeApi();", bridge).replace("</head>", "<style>${theme()}</style></head>"),
+            html.replace("const vscode = acquireVsCodeApi();", bridge).replace("</head>", "<style id=\"$THEME\">${theme()}</style></head>"),
         )
     }
+
+    /** Swaps in a fresh `theme()`; later, on the EDT, once the new theme is in place. */
+    private fun retheme() = ApplicationManager.getApplication().invokeLater({
+        val css = JsonPrimitive(theme())
+        browser?.cefBrowser?.executeJavaScript("{ const t = document.getElementById('$THEME'); if (t) t.textContent = $css; }", "", 0)
+    }, ModalityState.any())
 
     private fun send(message: JsonObject) {
         browser?.cefBrowser?.executeJavaScript("window.postMessage($message, '*')", "", 0)
@@ -175,6 +194,7 @@ class NarrationPanel(private val project: Project, private val host: PairHost) :
     companion object {
         const val ID = "AI Pair"
         private const val MAX_LOG = 400
+        private const val THEME = "ai-pair-theme"
     }
 }
 
