@@ -1,0 +1,16 @@
+{
+  "name": "@ai-pair/intellij-host",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs"
+  },
+  "dependencies": {
+    "@ai-pair/core": "*",
+    "@ai-pair/protocol": "*"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.1"
+  }
+}
