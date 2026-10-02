@@ -131,7 +131,7 @@ async function call(name: string, args: Record<string, unknown> = {}): Promise<s
 
 it("plays a batch in the plugin's editor", async () => {
   await call("start", { task: "test" })
-  await call("step", { actions: [{ move: { file: "a.ts" } }, { type: ["hi", ""] }] })
+  await call("step", { actions: [{ move: { file: "a.ts", line: 1, to: "line_end" } }, { type: "hi▌" }] })
   expect(await call("step", { actions: [] })).toMatch(/Batch 1 completed/)
   expect(plugin.editor.text("src/a.ts")).toBe("hi")
   expect(plugin.notices).toContainEqual(expect.objectContaining({ method: "renderCursor" }))
