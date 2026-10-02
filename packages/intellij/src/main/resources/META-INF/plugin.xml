@@ -20,6 +20,7 @@
         <group id="ai.pair.Actions" text="AI Pair" popup="true">
             <add-to-group group-id="ToolsMenu" anchor="last"/>
             <action id="ai.pair.SetUpAgent" class="ai.pair.actions.SetUpAgentAction" text="Set Up Agent"/>
+            <action id="ai.pair.PlayDemo" class="ai.pair.actions.PlayDemoAction" text="Play Demo Session"/>
             <action id="ai.pair.TogglePause" class="ai.pair.actions.TogglePauseAction" text="Pause / Resume"/>
             <action id="ai.pair.Interrupt" class="ai.pair.actions.InterruptAction" text="Interrupt"/>
             <action id="ai.pair.ToggleTurn" class="ai.pair.actions.ToggleTurnAction" text="Take / Hand Back the Turn"/>

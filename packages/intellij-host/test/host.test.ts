@@ -12,6 +12,7 @@ import { afterEach, beforeEach, expect, it } from "vitest"
 import { FakeEditor, testConfig } from "../../core/test/fake"
 import { EditorLink } from "../../relay/src/link"
 import { createServer } from "../../relay/src/server"
+import { SERVER, TODOS } from "../../vscode/src/demoScript"
 import { runHost } from "../src/host"
 import type { HostMessage, PluginMessage } from "../src/wire"
 
@@ -80,6 +81,13 @@ class FakePlugin {
         this.running.set(call.id, abort)
         return e.runCommand(command, { cwd, waitMs, signal: abort.signal }).finally(() => this.running.delete(call.id))
       }
+      case "refresh":
+        // Like the VFS: what's on disk replaces what the editor had.
+        for (const file of call.args.files) {
+          if (fs.existsSync(file)) e.files.set(file, fs.readFileSync(file, "utf8"))
+          else e.files.delete(file)
+        }
+        return Promise.resolve(null)
     }
   }
 }
@@ -142,3 +150,31 @@ it("removes its discovery file when the IDE goes away", async () => {
   await plugin.quit()
   expect(fs.existsSync(discovery)).toBe(false)
 })
+
+it("plays the demo, with its files set up on disk and refreshed in the IDE", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "ai-pair-"))
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), "ai-pair-demo-"))
+  const server = path.join(project, SERVER)
+  const todos = path.join(project, TODOS)
+  // Left over from an earlier run, on disk and in the editor.
+  fs.mkdirSync(path.dirname(todos), { recursive: true })
+  fs.writeFileSync(todos, "stale")
+  const demo = new FakePlugin(home)
+  demo.editor.files.set(server, "stale")
+  demo.editor.files.set(todos, "stale")
+  demo.send({ type: "init", root: project, workspaceFolders: [project], speed: 20, timing: fast, confirmCommands: false })
+  await demo.ready
+  try {
+    demo.send({ type: "command", method: "playDemo", args: {} })
+    const sessions = () => demo.notices.filter((m) => m.type === "notice" && m.method === "post" && m.args.event.type === "session")
+    for (let i = 0; i < 1000 && sessions().length < 2; i++) await new Promise((r) => setTimeout(r, 20))
+    expect(sessions()).toHaveLength(2)
+    // The last lines the script types: it played through without stopping early.
+    expect(demo.editor.files.get(todos)).toMatch(/^export interface Todo \{[^]*export function listTodos\(\): Todo\[\] \{\n  return todos;\n\}\n$/)
+    expect(demo.editor.files.get(server)).toContain('import { createTodo, listTodos } from "./todos";')
+  } finally {
+    await demo.quit()
+    fs.rmSync(home, { recursive: true, force: true })
+    fs.rmSync(project, { recursive: true, force: true })
+  }
+}, 30_000)

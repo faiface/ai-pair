@@ -116,6 +116,7 @@ class PairEditor(private val project: Project, private val host: PairHost) {
                 args["options"].asJsonObject["undoStopBefore"].asBoolean,
             )
             "save" -> JsonNull.INSTANCE.also { FileDocumentManager.getInstance().saveDocument(document(file!!)) }
+            "refresh" -> refresh(args["files"].asJsonArray.map { it.asString })
             else -> error("`$method` isn't supported in IntelliJ yet.")
         }
     }
@@ -130,6 +131,15 @@ class PairEditor(private val project: Project, private val host: PairHost) {
             selfNavUntil = System.currentTimeMillis() + SELF_NAV_MS
             manager.openTextEditor(OpenFileDescriptor(project, file), false)
         }
+        return JsonNull.INSTANCE
+    }
+
+    /** Files the host changed on disk (the demo's setup), which VS Code's file system would bring into open documents. */
+    private fun refresh(paths: List<String>): JsonElement {
+        val fs = LocalFileSystem.getInstance()
+        // A file that was created or deleted shows in its folder's listing; a changed one in itself.
+        val known = paths.flatMap { listOf(File(it), File(it).parentFile) }.mapNotNull(fs::findFileByIoFile).distinct()
+        VfsUtil.markDirtyAndRefresh(false, false, true, *known.toTypedArray())
         return JsonNull.INSTANCE
     }
 

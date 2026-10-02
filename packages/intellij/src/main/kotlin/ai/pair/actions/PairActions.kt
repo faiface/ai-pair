@@ -2,6 +2,8 @@ package ai.pair.actions
 
 import ai.pair.host.PairHost
 import ai.pair.setup.AgentSetup
+import com.intellij.notification.NotificationGroupManager
+import com.intellij.notification.NotificationType
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.ActionPlaces
 import com.intellij.openapi.actionSystem.AnAction
@@ -49,6 +51,28 @@ class FocusReplyAction : AnAction(), DumbAware {
 class SetUpAgentAction : AnAction(), DumbAware {
     override fun actionPerformed(e: AnActionEvent) {
         AgentSetup.setUpAgent(e.project ?: return)
+    }
+
+    override fun getActionUpdateThread() = ActionUpdateThread.BGT
+}
+
+/** The scripted demo session (packages/vscode/src/demoScript.ts), in the project's ai-pair-demo/. */
+class PlayDemoAction : AnAction(), DumbAware {
+    override fun actionPerformed(e: AnActionEvent) {
+        val project = e.project ?: return
+        val host = project.service<PairHost>()
+        if (host.sessionActive) {
+            NotificationGroupManager.getInstance().getNotificationGroup("AI Pair")
+                .createNotification("A pairing session is already active.", NotificationType.WARNING)
+                .notify(project)
+            return
+        }
+        host.command("playDemo")
+    }
+
+    /** The demo creates files in the project folder, as VS Code's needs an open folder. */
+    override fun update(e: AnActionEvent) {
+        e.presentation.isEnabled = e.project?.basePath != null
     }
 
     override fun getActionUpdateThread() = ActionUpdateThread.BGT

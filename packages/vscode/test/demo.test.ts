@@ -2,9 +2,7 @@
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { setup, until } from "../../core/test/fake"
-import { INITIAL_SERVER, SCRIPT, SERVER, stepScript, TODOS } from "../src/demo"
-
-vi.mock("vscode", () => ({}))
+import { INITIAL_SERVER, SCRIPT, SERVER, stepScript, TODOS } from "../src/demoScript"
 
 beforeEach(() => {
   vi.useFakeTimers()

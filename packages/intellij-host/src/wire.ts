@@ -33,6 +33,8 @@ export type Calls = {
   edit: { file: string; offset: number; deleteLength: number; text: string; options: EditOptions }
   save: { file: string }
   runCommand: { command: string; cwd: string; waitMs: number }
+  /** Not an `EditorPort` method: the host changed these files on disk (the demo's setup), so bring the IDE up to date. */
+  refresh: { files: string[] }
 }
 
 /** What each call answers with. */
@@ -44,6 +46,7 @@ export type Results = {
   edit: null
   save: null
   runCommand: CommandOutcome
+  refresh: null
 }
 
 /** Rendering and narration, which don't answer. */
@@ -72,6 +75,7 @@ export type Commands = {
   setConfirmCommands: { confirm: boolean }
   focused: {}
   setWorkspaceFolders: { folders: string[] }
+  playDemo: {}
 }
 
 /** One message per method of `T`. */
