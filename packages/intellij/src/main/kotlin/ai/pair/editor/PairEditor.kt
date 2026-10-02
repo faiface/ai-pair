@@ -115,7 +115,7 @@ class PairEditor(private val project: Project, private val host: PairHost) {
                 args["text"].asString,
                 args["options"].asJsonObject["undoStopBefore"].asBoolean,
             )
-            "save" -> JsonNull.INSTANCE.also { FileDocumentManager.getInstance().saveDocument(document(file!!)) }
+            "save" -> JsonNull.INSTANCE.also { VerbatimSave.save(document(file!!)) }
             "refresh" -> refresh(args["files"].asJsonArray.map { it.asString })
             else -> error("`$method` isn't supported in IntelliJ yet.")
         }
