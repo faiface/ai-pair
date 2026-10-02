@@ -117,4 +117,9 @@ export class RemoteEditor implements EditorPort {
   runCommand(command: string, options: RunOptions): Promise<CommandOutcome> {
     return this.link.call("runCommand", { command, cwd: options.cwd, waitMs: options.waitMs }, options.signal)
   }
+
+  /** Not part of `EditorPort`: brings files the host changed on disk into the IDE. */
+  async refresh(files: string[]): Promise<void> {
+    await this.link.call("refresh", { files })
+  }
 }

@@ -5,6 +5,7 @@ import { createInterface } from "node:readline"
 import type { Readable, Writable } from "node:stream"
 import { Bridge, Controller } from "@ai-pair/core"
 import { discoveryDir } from "@ai-pair/protocol"
+import { playDemo } from "./demo"
 import { Link, RemoteEditor } from "./remote"
 import { panelHtml } from "../../vscode/src/panelHtml"
 import type { Init, PluginMessage } from "./wire"
@@ -26,7 +27,7 @@ export async function runHost(input: Readable, output: Writable, dir = discovery
   session?.bridge.dispose()
 }
 
-type Session = { controller: Controller; bridge: Bridge; editor: RemoteEditor }
+type Session = { controller: Controller; bridge: Bridge; editor: RemoteEditor; root: string }
 type CommandMessage = Extract<PluginMessage, { type: "command" }>
 
 async function open(init: Init, link: Link, dir: string): Promise<Session> {
@@ -38,10 +39,10 @@ async function open(init: Init, link: Link, dir: string): Promise<Session> {
   const bridge = new Bridge(controller, { dir, workspaceFolders: () => editor.folders })
   await bridge.start()
   link.send({ type: "ready", discovery: bridge.file, panel: panelHtml("'self'") })
-  return { controller, bridge, editor }
+  return { controller, bridge, editor, root: init.root }
 }
 
-function command({ controller: c, bridge, editor }: Session, m: CommandMessage): void {
+function command({ controller: c, bridge, editor, root }: Session, m: CommandMessage): void {
   switch (m.method) {
     case "userEdit": {
       const { file, before, changes } = m.args
@@ -80,5 +81,7 @@ function command({ controller: c, bridge, editor }: Session, m: CommandMessage):
     case "setWorkspaceFolders":
       editor.folders = m.args.folders
       return bridge.writeDiscovery()
+    case "playDemo":
+      return void playDemo(c, editor, root).catch((e: unknown) => console.error("AI Pair demo failed:", e))
   }
 }

@@ -55,6 +55,8 @@ val buildHost by tasks.registering(Exec::class) {
     inputs.dir(layout.projectDirectory.dir("../core/src"))
     inputs.dir(layout.projectDirectory.dir("../protocol/src"))
     inputs.dir(layout.projectDirectory.dir("../relay/src"))
+    // The panel's page and the demo script are VS Code's own (panelHtml.ts, demoScript.ts).
+    inputs.dir(layout.projectDirectory.dir("../vscode/src"))
     outputs.files(hostDir.file("dist/intellij-host.cjs"), hostDir.file("dist/relay.cjs"))
 }
 
