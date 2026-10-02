@@ -1,0 +1,93 @@
+// The IntelliJ plugin ↔ host protocol: one JSON object per line, the plugin writing to the host's
+// stdin and reading its stdout. Files are absolute paths in the OS's own form; offsets are into the
+// document text, in UTF-16 code units (the same as a JVM String's).
+
+import type {
+  AgentState,
+  Change,
+  CommandOutcome,
+  CursorView,
+  EditOptions,
+  Focus,
+  PanelEvent,
+  SharedSelection,
+  TimingOverrides,
+} from "@ai-pair/core"
+
+/** The first line the plugin writes. */
+export type Init = {
+  type: "init"
+  root: string
+  workspaceFolders: string[]
+  speed: number
+  timing: TimingOverrides
+  confirmCommands: boolean
+}
+
+/** The editor methods that answer, by name: their arguments. */
+export type Calls = {
+  getText: { file: string }
+  eol: { file: string }
+  isDirty: { file: string }
+  show: { file: string }
+  edit: { file: string; offset: number; deleteLength: number; text: string; options: EditOptions }
+  save: { file: string }
+  runCommand: { command: string; cwd: string; waitMs: number }
+}
+
+/** What each call answers with. */
+export type Results = {
+  getText: string
+  eol: string
+  isDirty: boolean
+  show: null
+  edit: null
+  save: null
+  runCommand: CommandOutcome
+}
+
+/** Rendering and narration, which don't answer. */
+export type Notices = {
+  renderCursor: { cursor: CursorView | null; state: AgentState; focus: Focus }
+  renderPoint: { point: { file: string; start: number; end: number } | null }
+  reveal: {}
+  post: { event: PanelEvent }
+}
+
+/** What the programmer does, for the controller. */
+export type Commands = {
+  userEdit: { file: string; before: string; changes: Change[] }
+  userMessage: { text: string; selection?: SharedSelection }
+  userInterrupt: {}
+  pause: { reason?: string }
+  resume: { reason?: string }
+  togglePause: {}
+  takeTurn: {}
+  handBack: { message?: string; selection?: SharedSelection }
+  toggleTurn: { message?: string; selection?: SharedSelection }
+  endSession: {}
+  decideRun: { id: number; run: boolean; remember?: boolean }
+  setSpeed: { speed: number }
+  setTiming: { overrides: TimingOverrides }
+  setConfirmCommands: { confirm: boolean }
+  focused: {}
+  setWorkspaceFolders: { folders: string[] }
+}
+
+/** One message per method of `T`. */
+type Tagged<T, Type extends string> = { [M in keyof T]: { type: Type; method: M; args: T[M] } }[keyof T]
+
+/** Plugin → host. */
+export type PluginMessage =
+  | Init
+  | { type: "result"; id: number; result: unknown }
+  | { type: "error"; id: number; message: string }
+  | Tagged<Commands, "command">
+
+/** Host → plugin. */
+/** `ready.panel` is the narration panel's page, VS Code's own (packages/vscode/src/panelHtml.ts). */
+export type HostMessage =
+  | { type: "ready"; discovery: string ; panel: string }
+  | (Tagged<Calls, "call"> & { id: number })
+  | { type: "cancel"; id: number }
+  | Tagged<Notices, "notice">
