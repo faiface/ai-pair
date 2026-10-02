@@ -12,6 +12,7 @@
         <toolWindow id="AI Pair" anchor="right" icon="AllIcons.Toolwindows.ToolWindowMessages"
                     factoryClass="ai.pair.panel.PanelToolWindowFactory"/>
         <notificationGroup id="AI Pair" displayType="BALLOON"/>
+        <trailingSpacesOptionsProvider implementation="ai.pair.editor.VerbatimSave" order="first"/>
         <projectConfigurable parentId="tools" id="ai.pair.settings" displayName="AI Pair"
                              instance="ai.pair.settings.PairConfigurable"/>
     </extensions>
