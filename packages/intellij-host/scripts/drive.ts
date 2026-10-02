@@ -24,13 +24,13 @@ async function call(name: string, args: Record<string, unknown> = {}): Promise<s
 await call("start", { task: "Trying the editor integration" })
 await call("step", { actions: [
   { say: "A new file, then a function typed into it: its braces first, then the body." },
-  { move: { file: "hello.go" } },
-  { type_fast: ["package main\n\n", ""] },
-  { type: ["func hello() string {\n", "\n}\n"] },
-  { type: ["\treturn \"hello from the agent\"", ""] },
+  { move: { file: "hello.go", line: 1, to: "line_end" } },
+  { type_fast: "package main\n\n▌" },
+  { type: "func hello() string {\n▌\n}\n" },
+  { type: "\treturn \"hello from the agent\"▌" },
   { say: "And a selection, to see how it's drawn." },
   { select: { text: "hello from the agent" } },
-  { point: { text: "func hello() string {" } },
+  { point: { text: "return" } },
   { say: "And this is what pointing at code looks like." },
   { say: "And a command in the terminal." },
   { run: "go version" },
@@ -40,8 +40,8 @@ console.log(">>> Take the turn (Tools > AI Pair > Take / Hand Back the Turn), ed
 while (!(await call("listen")).includes("handed the turn back")) {}
 await call("step", { actions: [
   { say: "I see your edit. One more change, which should land in the right place despite it." },
-  { move: { before: "the agent", after: "\"" } },
-  { type: [" and you", ""] },
+  { move: { at: "the agent▌\"" } },
+  { type: " and you▌" },
 ] })
 await call("step", { actions: [] })
 await call("end", { summary: "That was the scripted session." })
