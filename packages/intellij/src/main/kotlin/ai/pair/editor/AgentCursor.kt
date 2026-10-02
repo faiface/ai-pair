@@ -22,6 +22,11 @@ class AgentCursor {
     private val pointHighlighters = mutableListOf<RangeHighlighter>()
     private var shown: Editor? = null
     private var pulseOn = true
+    var name = "Agent"
+        set(value) {
+            field = value
+            shown?.contentComponent?.repaint()
+        }
     private val pulse = Timer(450) {
         pulseOn = !pulseOn
         shown?.contentComponent?.repaint()
@@ -85,7 +90,7 @@ class AgentCursor {
             g2.color = if (state == "read" && !dim) READ else CURSOR
             g2.fillRect(p.x - 1, p.y, 2, editor.lineHeight)
 
-            val label = LABEL[state]?.let { "$NAME · $it" } ?: NAME
+            val label = LABEL[state]?.let { "$name · $it" } ?: name
             val font = editor.colorsScheme.getFont(EditorFontType.PLAIN)
             g2.font = font.deriveFont(font.size2D * 0.75f)
             val metrics = g2.fontMetrics
@@ -100,7 +105,6 @@ class AgentCursor {
     }
 
     companion object {
-        const val NAME = "Agent"
         val CURSOR = JBColor(0xC2410C, 0xE8875B)
         val READ = JBColor(0xB45309, 0xFACC15)
         val SELECTION = JBColor(Color(0xC2, 0x41, 0x0C, 0x2E), Color(0xE8, 0x87, 0x5B, 0x40))

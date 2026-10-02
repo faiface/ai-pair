@@ -85,6 +85,8 @@ class PairEditor(private val project: Project, private val host: PairHost) {
 
     fun cancel(id: Int) = terminals.cancel(id)
 
+    fun setAgentName(name: String) = ApplicationManager.getApplication().invokeLater({ cursor.name = name }, project.disposed)
+
     fun notice(method: String, args: JsonObject) {
         ApplicationManager.getApplication().invokeLater({
             when (method) {
