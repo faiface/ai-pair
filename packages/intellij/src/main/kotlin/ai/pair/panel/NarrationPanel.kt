@@ -182,6 +182,8 @@ class NarrationPanel(private val project: Project, private val host: PairHost) :
             "input-placeholderForeground" to css(UIUtil.getContextHelpForeground()),
             "focusBorder" to css(JBUI.CurrentTheme.Focus.focusColor()),
             "sideBarSectionHeader-border" to css(JBColor.border()),
+            // The page's --surface: the band and the speed menu, see-through without it.
+            "editor-background" to css(scheme.defaultBackground),
             "textCodeBlock-background" to css(scheme.defaultBackground),
             "textLink-foreground" to css(JBUI.CurrentTheme.Link.Foreground.ENABLED),
             "aiPair-cursor" to css(AgentCursor.CURSOR),
