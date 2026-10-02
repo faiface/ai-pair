@@ -9,10 +9,13 @@ import com.intellij.openapi.util.io.FileUtil
 import com.intellij.openapi.wm.ToolWindowManager
 import com.intellij.terminal.frontend.toolwindow.TerminalToolWindowTab
 import com.intellij.terminal.frontend.toolwindow.TerminalToolWindowTabsManager
+import com.intellij.util.execution.ParametersListUtil
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import org.jetbrains.plugins.terminal.TerminalOptionsProvider
+import org.jetbrains.plugins.terminal.TerminalProjectOptionsProvider
 import org.jetbrains.plugins.terminal.view.shellIntegration.TerminalBlockId
 import org.jetbrains.plugins.terminal.view.shellIntegration.TerminalCommandBlock
 import org.jetbrains.plugins.terminal.view.shellIntegration.TerminalCommandExecutionListener
@@ -35,7 +38,11 @@ class PairTerminals(private val project: Project) {
     fun run(id: Int, command: String, cwd: String, waitMs: Long, answer: (JsonObject) -> Unit) {
         val run = Run(answer) { waiting.remove(id) }
         waiting[id] = run
-        ApplicationManager.getApplication().invokeLater({ start(run, command, cwd, waitMs) }, project.disposed)
+        // Reading the Terminal's shell blocks, which the EDT forbids.
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val shell = ParametersListUtil.parse(TerminalProjectOptionsProvider.getInstance(project).shellPath)
+            ApplicationManager.getApplication().invokeLater({ start(run, command, cwd, waitMs, shell) }, project.disposed)
+        }
     }
 
     fun cancel(id: Int) {
@@ -43,9 +50,9 @@ class PairTerminals(private val project: Project) {
         ApplicationManager.getApplication().invokeLater { run.finish(ended = false) }
     }
 
-    private fun start(run: Run, command: String, cwd: String, waitMs: Long) {
+    private fun start(run: Run, command: String, cwd: String, waitMs: Long, shell: List<String>) {
         if (run.answered) return
-        val tab = acquire(cwd)
+        val tab = acquire(cwd, shell)
         tab.busy = true
         ToolWindowManager.getInstance(project).getToolWindow("Terminal")?.show()
         val view = tab.tab.view
@@ -64,7 +71,7 @@ class PairTerminals(private val project: Project) {
             var ours: TerminalBlockId? = null
             run.outcome = { ended ->
                 val block = integration.blocksModel.blocks.firstOrNull { it.id == ours } as? TerminalCommandBlock
-                outcome(block?.getOutputText(view.outputModels.regular), if (ended) block?.exitCode else null, running = !ended)
+                outcome(block?.getOutputText(view.outputModels.regular), if (ended) block?.exitCode else null, running = !ended, tab.shell)
             }
             val listening = Disposer.newDisposable()
             integration.addCommandExecutionListener(listening, object : TerminalCommandExecutionListener {
@@ -77,7 +84,7 @@ class PairTerminals(private val project: Project) {
                     if (block.id != ours) return
                     Disposer.dispose(listening)
                     tab.busy = false
-                    run.answer(outcome(block.getOutputText(event.outputModel), block.exitCode, running = false))
+                    run.answer(outcome(block.getOutputText(event.outputModel), block.exitCode, running = false, tab.shell))
                 }
             })
             view.createSendTextBuilder().shouldExecute().send(command)
@@ -86,16 +93,25 @@ class PairTerminals(private val project: Project) {
         }
     }
 
-    private fun acquire(cwd: String): Owned {
+    /** A free tab of ours in [cwd], or a new one running [configured], the Terminal's shell. */
+    private fun acquire(cwd: String, configured: List<String>): Owned {
         val manager = TerminalToolWindowTabsManager.getInstance(project)
         owned.retainAll { it.tab in manager.tabs }
         owned.firstOrNull { !it.busy && FileUtil.pathsEqual(it.tab.view.getCurrentDirectory() ?: it.cwd, cwd) }?.let { return it }
-        val tab = manager.createTabBuilder().workingDirectory(cwd).tabName("AI Pair").requestFocus(false).createTab()
-        return Owned(tab, cwd).also { owned += it }
+        // cmd has no shell integration, so its output could never be captured: the agent's tab uses PowerShell instead.
+        val swap = configured.firstOrNull()?.let(::shellName) == "cmd" && TerminalOptionsProvider.instance.shellIntegration
+        val shell = if (swap) listOf(POWERSHELL) else configured
+        val tab = manager.createTabBuilder().workingDirectory(cwd).apply { if (swap) shellCommand(shell) }
+            .tabName("AI Pair").requestFocus(false).createTab()
+        return Owned(tab, cwd, shell.firstOrNull()?.let(::shellName)).also { owned += it }
     }
 }
 
-private class Owned(val tab: TerminalToolWindowTab, val cwd: String) {
+/** `bash` for `/bin/bash`, `powershell` for `C:\...\PowerShell.exe`: what the agent writes its commands for. */
+private fun shellName(executable: String) =
+    executable.substringAfterLast('/').substringAfterLast('\\').lowercase().removeSuffix(".exe")
+
+private class Owned(val tab: TerminalToolWindowTab, val cwd: String, val shell: String?) {
     var busy = false
 }
 
@@ -118,15 +134,19 @@ private class Run(private val reply: (JsonObject) -> Unit, private val done: () 
     }
 }
 
-private fun outcome(output: String?, exitCode: Int?, running: Boolean) = JsonObject().apply {
+private fun outcome(output: String?, exitCode: Int?, running: Boolean, shell: String?) = JsonObject().apply {
     val text = output.orEmpty().replace("\r\n", "\n")
     addProperty("output", text.takeLast(MAX_OUTPUT))
     if (text.length > MAX_OUTPUT) addProperty("truncated", true)
     if (running) addProperty("running", true) else exitCode?.let { addProperty("exitCode", it) }
+    shell?.let { addProperty("shell", it) }
 }
 
 /** How long a new terminal gets to report shell integration before the command is just typed in. */
 private const val SHELL_INTEGRATION_MS = 5000L
+
+/** What the agent's tab runs instead of cmd: the IDE's own default shell on Windows. */
+private const val POWERSHELL = "powershell.exe"
 
 /** Output kept for the agent: the tail, where the result and the errors are. */
 private const val MAX_OUTPUT = 12_000
