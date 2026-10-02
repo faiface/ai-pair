@@ -12,6 +12,8 @@
         <toolWindow id="AI Pair" anchor="right" icon="AllIcons.Toolwindows.ToolWindowMessages"
                     factoryClass="ai.pair.panel.PanelToolWindowFactory"/>
         <notificationGroup id="AI Pair" displayType="BALLOON"/>
+        <projectConfigurable parentId="tools" id="ai.pair.settings" displayName="AI Pair"
+                             instance="ai.pair.settings.PairConfigurable"/>
     </extensions>
 
     <actions>

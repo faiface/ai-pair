@@ -2,11 +2,13 @@ package ai.pair.panel
 
 import ai.pair.editor.AgentCursor
 import ai.pair.host.PairHost
+import ai.pair.settings.PairSettings
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.components.service
 import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.project.Project
@@ -32,7 +34,6 @@ class NarrationPanel(private val project: Project, private val host: PairHost) :
     private var page: String? = null
     private var browser: JBCefBrowser? = null
     private var query: JBCefJSQuery? = null
-    private var speed = 1.0
 
     fun component(): JComponent {
         if (!JBCefApp.isSupported()) return JBLabel("AI Pair needs JCEF, which this IDE doesn't support.")
@@ -94,13 +95,13 @@ class NarrationPanel(private val project: Project, private val host: PairHost) :
             "ready" -> {
                 val events = JsonArray().apply { synchronized(log) { log.forEach(::add) } }
                 send(JsonObject().apply { addProperty("type", "replay"); add("events", events) })
-                showSpeed()
+                showSpeed(service<PairSettings>().effective(project).speed)
                 ApplicationManager.getApplication().invokeLater { showSelection(host.editor.selectionRef()) }
             }
-            "speed" -> {
-                speed = m["value"].asDouble
-                host.command("setSpeed", JsonObject().apply { addProperty("speed", speed) })
-                showSpeed()
+            // Like VS Code's, the menu sets the speed for all projects; a project's own speed still wins.
+            "speed" -> m["value"].asDouble.let { value ->
+                val settings = service<PairSettings>()
+                settings.update { settings.loadState(settings.state.copy(speed = value)) }
             }
             // Replying means "go on with this", so any pause ends.
             "reply" -> {
@@ -127,7 +128,8 @@ class NarrationPanel(private val project: Project, private val host: PairHost) :
         return m.deepCopy().apply { add("selection", selection) }
     }
 
-    private fun showSpeed() = send(JsonObject().apply { addProperty("type", "speed"); addProperty("value", speed) })
+    /** The speed setting changed. */
+    fun showSpeed(speed: Double) = send(JsonObject().apply { addProperty("type", "speed"); addProperty("value", speed) })
 
     /** Opens a file the page names, relative to the project or absolute, at a line. */
     private fun open(file: String, line: Int) {

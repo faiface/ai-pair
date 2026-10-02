@@ -2,6 +2,7 @@ package ai.pair.host
 
 import ai.pair.editor.PairEditor
 import ai.pair.panel.NarrationPanel
+import ai.pair.settings.PairSettings
 import com.google.gson.JsonArray
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
@@ -10,6 +11,7 @@ import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.ide.plugins.PluginManagerCore
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.Service
+import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.extensions.PluginId
 import com.intellij.openapi.project.Project
@@ -44,13 +46,30 @@ class PairHost(private val project: Project) : Disposable {
         thread(name = "AI Pair host log", isDaemon = true) {
             process.errorStream.bufferedReader(Charsets.UTF_8).forEachLine { log.warn("host: $it") }
         }
+        val settings = service<PairSettings>().effective(project)
+        editor.setAgentName(settings.agentName)
         send(message("init") {
             addProperty("root", root)
             add("workspaceFolders", JsonArray().apply { add(root) })
-            addProperty("speed", 1.0)
-            add("timing", JsonObject())
-            addProperty("confirmCommands", true)
+            addProperty("speed", settings.speed)
+            add("timing", PairSettings.parseTiming(settings.timing) ?: JsonObject())
+            addProperty("confirmCommands", settings.confirmCommands)
         })
+    }
+
+    /** The settings changed, on the settings page or the panel's speed menu. */
+    fun settingsChanged(old: PairSettings.Values, new: PairSettings.Values) {
+        if (new.speed != old.speed) {
+            command("setSpeed", JsonObject().apply { addProperty("speed", new.speed) })
+            panel.showSpeed(new.speed)
+        }
+        if (new.timing != old.timing) {
+            command("setTiming", JsonObject().apply { add("overrides", PairSettings.parseTiming(new.timing) ?: JsonObject()) })
+        }
+        if (new.confirmCommands != old.confirmCommands) {
+            command("setConfirmCommands", JsonObject().apply { addProperty("confirm", new.confirmCommands) })
+        }
+        if (new.agentName != old.agentName) editor.setAgentName(new.agentName)
     }
 
     fun answer(id: Int, result: JsonElement) = send(message("result") { addProperty("id", id); add("result", result) })
