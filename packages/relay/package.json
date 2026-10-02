@@ -10,6 +10,7 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@ai-pair/core": "*",
     "@types/ws": "^8.18.1"
   }
 }

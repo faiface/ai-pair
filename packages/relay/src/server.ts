@@ -13,7 +13,7 @@ declare const AI_PAIR_VERSION: string | undefined
 const VERSION = typeof AI_PAIR_VERSION === "string" ? AI_PAIR_VERSION : "dev"
 
 /** Always loaded by the harness, so kept short; the full guide comes with `start`. */
-export const INSTRUCTIONS = `Live pair programming in the programmer's editor (VS Code with the AI Pair extension). When the programmer asks to pair, call \`start\` with your working directory: its result includes the pairing guide, which you follow for the whole session. During a session, everything you do through \`step\` appears in their editor at a human pace, with your narration, and they can interrupt or take over at any moment. Never end your turn during a session; call \`listen\` instead.`
+export const INSTRUCTIONS = `Live pair programming in the programmer's editor (VS Code or a JetBrains IDE, with AI Pair installed). When the programmer asks to pair, call \`start\` with your working directory: its result includes the pairing guide, which you follow for the whole session. During a session, everything you do through \`step\` appears in their editor at a human pace, with your narration, and they can interrupt or take over at any moment. Never end your turn during a session; call \`listen\` instead.`
 
 /** The agent-facing part of AGENT_GUIDE.md: everything after the first horizontal rule. */
 export function agentGuide(markdown: string): string {
