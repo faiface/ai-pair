@@ -178,7 +178,7 @@ describe("relay", () => {
 
   it("explains when no editor has the project open", async () => {
     const client = await connect("/elsewhere")
-    expect((await call(client, "start")).text).toMatch(/^no_editor: No VS Code window has \/elsewhere open/)
+    expect((await call(client, "start")).text).toMatch(/^no_editor: No editor window has \/elsewhere open/)
     const given = await call(client, "start", { cwd: "/also/elsewhere" })
     expect(given.text).toMatch(/^no_editor: No VS Code window has \/also\/elsewhere open/)
   })
