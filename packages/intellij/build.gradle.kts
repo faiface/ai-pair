@@ -1,4 +1,5 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.intellij.platform.gradle.TestFrameworkType
 import org.jetbrains.intellij.platform.gradle.tasks.PrepareSandboxTask
 
 plugins {
@@ -16,13 +17,23 @@ repositories {
     }
 }
 
+// The integration test (src/integrationTest): a real IDE with the plugin, driven by Starter + Driver.
+val integrationTest by sourceSets.creating
+
 dependencies {
     intellijPlatform {
         val platformPath = providers.gradleProperty("platformPath").orNull
         if (platformPath != null) local(platformPath) else create("GO", "2026.1.3")
         bundledPlugin("org.jetbrains.plugins.terminal")
         bundledModule("intellij.terminal.frontend")
+        testFramework(TestFrameworkType.Starter, configurationName = integrationTest.implementationConfigurationName)
     }
+    integrationTest.implementationConfigurationName(kotlin("stdlib"))
+    integrationTest.implementationConfigurationName("org.junit.jupiter:junit-jupiter:5.13.4")
+    integrationTest.runtimeOnlyConfigurationName("org.junit.platform:junit-platform-launcher:1.13.4")
+    integrationTest.implementationConfigurationName("org.kodein.di:kodein-di-jvm:7.26.1")
+    integrationTest.implementationConfigurationName("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.10.2")
+    integrationTest.implementationConfigurationName("com.google.code.gson:gson:2.13.1")
 }
 
 intellijPlatform {
@@ -65,6 +76,26 @@ tasks.runIde {
     providers.gradleProperty("openProject").orNull?.let { args(it) }
     // -PaiPairHome=<dir>: keep the sandbox's discovery files and launcher away from the real ~/.ai-pair.
     providers.gradleProperty("aiPairHome").orNull?.let { environment("AI_PAIR_HOME", it) }
+}
+
+// ./gradlew integrationTest: starts the IDE the plugin builds against (-PplatformPath, or the downloaded one).
+intellijPlatformTesting.testIdeUi.register("integrationTest") {
+    task {
+        testClassesDirs = integrationTest.output.classesDirs
+        classpath = integrationTest.runtimeClasspath
+        useJUnitPlatform()
+        // The test installs the plugin from the built zip, the task's path.to.build.plugin.
+        val ide = intellijPlatform.platformPath
+        doFirst { systemProperty("ai.pair.ide", ide.toString()) }
+        // Starter's copy of the IDE and its test runs go to build/out/ide-tests (otherwise the repo's out/).
+        val build = layout.buildDirectory.get().asFile
+        systemProperty("ai.pair.build", build.path)
+        systemProperty("allure.results.directory", File(build, "allure-results").path)
+        testLogging {
+            showStandardStreams = true
+            exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        }
+    }
 }
 
 tasks.withType<PrepareSandboxTask>().configureEach {
