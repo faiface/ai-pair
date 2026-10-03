@@ -45,7 +45,8 @@ async function open(init: Init, link: Link, dir: string): Promise<Session> {
 function command({ controller: c, bridge, editor, root }: Session, m: CommandMessage): void {
   switch (m.method) {
     case "userEdit": {
-      const { file, before, changes } = m.args
+      const { file, before, changes, version } = m.args
+      editor.seen.set(file, version)
       const after = changes.reduce((text, change) => text.slice(0, change.offset) + change.text + text.slice(change.offset + change.deleteLength), before)
       return c.userEdit(file, before, after, changes)
     }
