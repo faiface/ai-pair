@@ -4,6 +4,7 @@ import com.intellij.driver.client.Driver
 import com.intellij.driver.client.Remote
 import com.intellij.driver.model.OnDispatcher
 import com.intellij.driver.sdk.Editor
+import com.intellij.driver.sdk.FileEditor
 import com.intellij.driver.sdk.FileEditorManager
 import com.intellij.driver.sdk.Project
 import com.intellij.driver.sdk.VirtualFile
@@ -79,6 +80,26 @@ interface EditorUtil {
 @Remote("com.intellij.openapi.actionSystem.DataContext")
 interface DataContext
 
+@Remote("com.intellij.openapi.command.undo.UndoManager")
+interface UndoManagers {
+    fun getInstance(project: Project): UndoManager
+}
+
+@Remote("com.intellij.openapi.command.undo.UndoManager")
+interface UndoManager {
+    fun undo(editor: FileEditor)
+}
+
+@Remote("com.intellij.openapi.fileEditor.impl.text.TextEditorProvider")
+interface TextEditorProviders {
+    fun getInstance(): TextEditorProvider
+}
+
+@Remote("com.intellij.openapi.fileEditor.impl.text.TextEditorProvider")
+interface TextEditorProvider {
+    fun getTextEditor(editor: Editor): FileEditor
+}
+
 /** What the programmer does in the IDE, and what it shows them. */
 class Programmer(private val driver: Driver, private val project: Project, private val root: File) {
     val host = driver.service(PairHost::class, project)
@@ -102,14 +123,26 @@ class Programmer(private val driver: Driver, private val project: Project, priva
      * character is its own command; a document change from outside one is refused.
      */
     fun type(name: String, offset: Int, text: String) {
-        val editor = driver.service(FileEditorManager::class, project).getSelectedTextEditor() ?: error("No editor in front")
+        val editor = inFront(name)
         driver.withContext(OnDispatcher.EDT) {
-            check(editor.getVirtualFile().getName() == File(name).name) { "${editor.getVirtualFile().getName()} is in front, not $name" }
             editor.getCaretModel().moveToOffset(offset)
             val context = utility(EditorUtil::class).getEditorDataContext(editor)
             val typing = utility(TypedActions::class).getInstance()
             for (c in text) typing.actionPerformed(editor, c, context)
         }
+    }
+
+    /** Undoes the last step in the file in front, as Ctrl+Z there does. */
+    fun undo(name: String) {
+        val editor = driver.utility(TextEditorProviders::class).getInstance().getTextEditor(inFront(name))
+        driver.withWriteAction { utility(UndoManagers::class).getInstance(project).undo(editor) }
+    }
+
+    private fun inFront(name: String): Editor {
+        val editor = driver.service(FileEditorManager::class, project).getSelectedTextEditor() ?: error("No editor in front")
+        val front = driver.withReadAction { editor.getVirtualFile().getName() }
+        check(front == File(name).name) { "$front is in front, not $name" }
+        return editor
     }
 }
 
