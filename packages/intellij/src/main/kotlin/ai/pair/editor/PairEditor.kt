@@ -87,6 +87,9 @@ class PairEditor(private val project: Project, private val host: PairHost) {
 
     fun cancel(id: Int) = terminals.cancel(id)
 
+    /** The file the agent's cursor is in, while a session is active. */
+    fun agentFile(): String? = cursorAt?.file?.takeIf { sessionActive }
+
     fun setAgentName(name: String) = ApplicationManager.getApplication().invokeLater({ cursor.name = name }, project.disposed)
 
     fun notice(method: String, args: JsonObject) {
