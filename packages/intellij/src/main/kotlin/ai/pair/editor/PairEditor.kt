@@ -19,6 +19,7 @@ import com.intellij.openapi.editor.event.DocumentListener
 import com.intellij.openapi.editor.event.SelectionEvent
 import com.intellij.openapi.editor.event.SelectionListener
 import com.intellij.openapi.fileEditor.FileDocumentManager
+import com.intellij.openapi.fileEditor.FileDocumentManagerListener
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.FileEditorManagerEvent
 import com.intellij.openapi.fileEditor.FileEditorManagerListener
@@ -46,7 +47,9 @@ class PairEditor(private val project: Project, private val host: PairHost) {
 
     /** Set while our own edit is applied, so the listener doesn't report it as the programmer's. */
     private var applying = false
-    private val programmerEdits = WeakHashMap<Document, ProgrammerEdits>()
+    /** Documents being reloaded from disk, whose changes are a tool's or the file system's; EDT only. */
+    private val reloading = mutableSetOf<Document>()
+    private val outsideEdits = WeakHashMap<Document, OutsideEdits>()
     var sessionActive = false
         private set
 
@@ -72,6 +75,17 @@ class PairEditor(private val project: Project, private val host: PairHost) {
             override fun selectionChanged(e: SelectionEvent) = onSelection()
         }
         EditorFactory.getInstance().eventMulticaster.addSelectionListener(selections, host)
+        // A reload's change comes between these two, synchronously on the EDT.
+        val sync = object : FileDocumentManagerListener {
+            override fun beforeFileContentReload(file: VirtualFile, document: Document) {
+                reloading += document
+            }
+
+            override fun fileContentReloaded(file: VirtualFile, document: Document) {
+                reloading -= document
+            }
+        }
+        ApplicationManager.getApplication().messageBus.connect(host).subscribe(FileDocumentManagerListener.TOPIC, sync)
     }
 
     fun call(id: Int, method: String, args: JsonObject) {
@@ -150,11 +164,11 @@ class PairEditor(private val project: Project, private val host: PairHost) {
     }
 
     /**
-     * The host planned the edit against the document as of the programmer's edit `seen`; any it hasn't seen yet came
+     * The host planned the edit against the document as of the outside edit `seen`; any it hasn't seen yet came
      * after. Core counts its own edit in flight as first, so it lands as if it had been applied before them.
      */
     private fun edit(document: Document, offset: Int, deleteLength: Int, text: String, newUndoStep: Boolean, seen: Int): JsonElement {
-        val ours = programmerEdits[document]?.agentFirst(seen, Change(offset, deleteLength, text.length))
+        val ours = outsideEdits[document]?.agentFirst(seen, Change(offset, deleteLength, text.length))
             ?: Change(offset, deleteLength, text.length)
         if (newUndoStep) undoGroup = "ai-pair-${++undoSteps}"
         WriteCommandAction.writeCommandAction(project).withName("AI Pair").withGroupId(undoGroup).run<Exception> {
@@ -215,8 +229,10 @@ class PairEditor(private val project: Project, private val host: PairHost) {
             addProperty("deleteLength", event.oldLength)
             addProperty("text", event.newFragment.toString())
         }
-        val edits = programmerEdits.getOrPut(event.document, ::ProgrammerEdits)
-        host.command("userEdit", JsonObject().apply {
+        val edits = outsideEdits.getOrPut(event.document, ::OutsideEdits)
+        // VS Code's two kinds of change that aren't the programmer's: a reload from disk, and one during the agent's save.
+        val byOther = event.document in reloading || VerbatimSave.isSaving(file)
+        host.command(if (byOther) "otherEdit" else "userEdit", JsonObject().apply {
             addProperty("file", FileUtil.toSystemDependentName(file.path))
             addProperty("before", before.toString())
             add("changes", JsonArray().apply { add(change) })
@@ -336,10 +352,11 @@ private data class Change(val offset: Int, val deleteLength: Int, val length: In
 }
 
 /**
- * The programmer's edits to a document, numbered as the `userEdit`s that report them, and those the host hasn't seen
- * yet, rebased on the host's view of the document (what the agent's edits are planned against).
+ * The edits to a document that weren't the agent's, the programmer's and others', numbered as the `userEdit`s and
+ * `otherEdit`s that report them, and those the host hasn't seen yet, rebased on the host's view of the document (what
+ * the agent's edits are planned against).
  */
-private class ProgrammerEdits {
+private class OutsideEdits {
     private var version = 0
     private val unseen = ArrayDeque<Pair<Int, Change>>()
 

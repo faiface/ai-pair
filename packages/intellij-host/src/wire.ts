@@ -31,7 +31,7 @@ export type Calls = {
   isDirty: { file: string }
   show: { file: string }
   /**
-   * `seen` is the `version` of the file's last `userEdit` the host had when it planned the edit. The programmer's
+   * `seen` is the `version` of the file's last `userEdit` or `otherEdit` the host had when it planned the edit. The
    * changes after that one are the plugin's to shift it through, as if the edit had come first, as `core` assumes.
    */
   edit: { file: string; offset: number; deleteLength: number; text: string; options: EditOptions; seen: number }
@@ -63,8 +63,10 @@ export type Notices = {
 
 /** What the programmer does, for the controller. */
 export type Commands = {
-  /** `version` counts the programmer's edits to the document, this one included. */
+  /** `version` counts the document's changes that weren't the agent's, the programmer's and others', this one included. */
   userEdit: { file: string; before: string; changes: Change[]; version: number }
+  /** A change the programmer didn't make: a reload from disk, or one made during the agent's save. */
+  otherEdit: { file: string; before: string; changes: Change[]; version: number }
   userMessage: { text: string; selection?: SharedSelection }
   userInterrupt: {}
   pause: { reason?: string }

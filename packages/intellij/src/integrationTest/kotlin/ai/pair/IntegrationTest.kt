@@ -21,9 +21,9 @@ import kotlin.io.path.Path
 import kotlin.io.path.createTempDirectory
 
 // Runs a real IDE with the plugin (Starter), plays the programmer in it (Driver) and the agent through the launcher, as
-// VS Code's test/integration.ts does in VS Code: the demo, a programmer edit interrupting, undo in steps, the agent's
-// file saved verbatim (its own saves and the IDE's autosave), taking and handing back the turn, and a `run`. Changes by others
-// aren't reported as such yet (see the plan's Known bugs), so VS Code's scenario for them isn't here.
+// VS Code's test/integration.ts does in VS Code: the demo, a change by a tool reported as not the programmer's, a
+// programmer edit interrupting, undo in steps, the agent's file saved verbatim (its own saves and the IDE's autosave),
+// taking and handing back the turn, and a `run`.
 // ./gradlew integrationTest -PplatformPath=<IDE>: one IDE start, about a minute and a half.
 
 const val EXPECTED_TODOS = """export interface Todo {
@@ -125,8 +125,31 @@ class IntegrationTest {
         assertEquals(EXPECTED_SERVER, ide.buffer("ai-pair-demo/src/server.ts"))
         assertEquals(EXPECTED_SERVER, disk("ai-pair-demo/src/server.ts"), "saved after each batch")
 
-        // A programmer edit mid-typing interrupts, and the report shows exactly what was typed.
+        // A change the programmer didn't make is reported as such, without interrupting: a tool writing to another file,
+        // which the IDE reloads. VS Code's second half, a save participant trimming the agent's save, can't happen here:
+        // the agent's saves are verbatim, and IntelliJ's actions on save run only on its own Save action.
         ide.command("setSpeed", """{"speed": 1}""")
+        File(root, "other.txt").writeText("before\n")
+        call("start", """{"task": "other edits"}""")
+        // Opened, so the IDE holds a document for it, as an open file does.
+        call("read", """{"file": "other.txt"}""")
+        step("""[{"move": {"file": "other.txt", "line": 1, "to": "line_end"}}]""")
+        assertTrue(COMPLETED.containsMatchIn(step()))
+        step("""[{"move": {"file": "busy.txt", "line": 1, "to": "line_end"}}, {"type_fast": "${"x".repeat(200)}▌"}]""")
+        val queued = agent.step("""[{"type": "abc▌"}]""")
+        Thread.sleep(1500)
+        File(root, "other.txt").writeText("after\n")
+        ide.refresh("other.txt")
+        until("the reload") { ide.buffer("other.txt") == "after\n" }
+        val others = queued.get(60, TimeUnit.SECONDS) + "\n" + step()
+        assertTrue("other.txt was changed, not by the programmer but by a tool, a formatter, or on disk:\n@@ -1,1 +1,1 @@\n-before\n+after" in others, others)
+        assertTrue(Regex("""Batch \d+ completed[\s\S]*Batch \d+ completed""").containsMatchIn(others), others)
+        assertTrue("The programmer edited" !in others && "interrupted" !in others && "discarded" !in others, others)
+        assertEquals("x".repeat(200) + "abc", ide.buffer("busy.txt"))
+        call("end", """{"summary": "Bye."}""")
+        println("changes by others are reported as theirs")
+
+        // A programmer edit mid-typing interrupts, and the report shows exactly what was typed.
         val alphabet = "abcdefghijklmnopqrstuvwxyz"
         call("start", """{"task": "interrupt test"}""")
         step("""[{"move": {"file": "scratch.txt", "line": 1, "to": "line_end"}}, {"type": "$alphabet▌"}]""")
