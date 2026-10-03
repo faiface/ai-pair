@@ -29,6 +29,9 @@ class VerbatimSave : TrailingSpacesOptionsProvider {
     companion object {
         private val saving = ConcurrentHashMap.newKeySet<VirtualFile>()
 
+        /** Whether the agent is saving [file]: changes meanwhile are by save hooks, not the programmer. */
+        fun isSaving(file: VirtualFile) = file in saving
+
         fun save(document: Document) {
             val manager = FileDocumentManager.getInstance()
             val file = manager.getFile(document) ?: return manager.saveDocument(document)

@@ -49,6 +49,12 @@ interface LocalFileSystems {
 @Remote("com.intellij.openapi.vfs.LocalFileSystem")
 interface LocalFileSystem {
     fun refreshAndFindFileByPath(path: String): VirtualFile?
+    fun findFileByPath(path: String): RefreshableFile?
+}
+
+@Remote("com.intellij.openapi.vfs.VirtualFile")
+interface RefreshableFile {
+    fun refresh(asynchronous: Boolean, recursive: Boolean)
 }
 
 @Remote("com.intellij.openapi.fileEditor.FileDocumentManager")
@@ -114,6 +120,10 @@ class Programmer(private val driver: Driver, private val project: Project, priva
             .refreshAndFindFileByPath(File(root, name).invariantSeparatorsPath) ?: error("No $name in the IDE")
         return driver.withReadAction { service(FileDocumentManager::class).getDocument(file)!!.getText() }
     }
+
+    /** Has the IDE look at a file changed on disk, as it does by itself when its window gains focus. */
+    fun refresh(name: String) = driver.utility(LocalFileSystems::class).getInstance()
+        .findFileByPath(File(root, name).invariantSeparatorsPath)!!.refresh(true, false)
 
     /** Saves every file, as the IDE's autosave does when its window loses focus or sits idle. */
     fun saveAll() = driver.withWriteAction { service(FileDocumentManager::class).saveAllDocuments() }

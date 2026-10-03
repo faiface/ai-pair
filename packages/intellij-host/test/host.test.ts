@@ -144,6 +144,20 @@ it("forwards the programmer's messages to the agent", async () => {
   expect(await listening).toMatch(/hello from IntelliJ/)
 })
 
+it("reports a change the programmer didn't make as theirs, without interrupting a batch in another file", async () => {
+  const other = path.join(root, "src", "b.ts")
+  plugin.editor.files.set(other, "before\n")
+  await call("start", { task: "test" })
+  await call("step", { actions: [{ move: { file: "a.ts", line: 1, to: "line_end" } }, { type: "hi▌" }] })
+  plugin.editor.files.set(other, "after\n")
+  const changes = [{ offset: 0, deleteLength: 6, text: "after" }]
+  plugin.send({ type: "command", method: "otherEdit", args: { file: other, before: "before\n", changes, version: 1 } })
+  const report = await call("step", { actions: [] })
+  expect(report).toMatch(/b\.ts was changed, not by the programmer/)
+  expect(report).toMatch(/Batch 1 completed/)
+  expect(plugin.editor.text("src/a.ts")).toBe("hi")
+})
+
 it("removes its discovery file when the IDE goes away", async () => {
   const discovery = await plugin.ready
   expect(fs.existsSync(discovery)).toBe(true)
