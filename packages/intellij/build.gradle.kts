@@ -23,7 +23,10 @@ val integrationTest by sourceSets.creating
 dependencies {
     intellijPlatform {
         val platformPath = providers.gradleProperty("platformPath").orNull
-        if (platformPath != null) local(platformPath) else create("GO", "2026.1.3")
+        // -PplatformType=IU -PplatformVersion=2026.1.3 downloads another IDE instead, e.g. IntelliJ IDEA.
+        val platformType = providers.gradleProperty("platformType").getOrElse("GO")
+        val platformVersion = providers.gradleProperty("platformVersion").getOrElse("2026.1.3")
+        if (platformPath != null) local(platformPath) else create(platformType, platformVersion)
         bundledPlugin("org.jetbrains.plugins.terminal")
         bundledModule("intellij.terminal.frontend")
         testFramework(TestFrameworkType.Starter, configurationName = integrationTest.implementationConfigurationName)
