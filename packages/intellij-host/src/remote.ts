@@ -58,6 +58,9 @@ export class Link {
 type Pending = { resolve: (result: unknown) => void; reject: (error: Error) => void }
 
 export class RemoteEditor implements EditorPort {
+  /** Each file's last `userEdit` version, which the edits planned after it have seen. */
+  readonly seen = new Map<string, number>()
+
   constructor(
     private readonly link: Link,
     private readonly root: string,
@@ -95,7 +98,7 @@ export class RemoteEditor implements EditorPort {
   }
 
   async edit(file: string, offset: number, deleteLength: number, text: string, options: EditOptions): Promise<void> {
-    await this.link.call("edit", { file, offset, deleteLength, text, options })
+    await this.link.call("edit", { file, offset, deleteLength, text, options, seen: this.seen.get(file) ?? 0 })
   }
 
   async save(file: string): Promise<void> {

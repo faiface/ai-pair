@@ -30,7 +30,11 @@ export type Calls = {
   eol: { file: string }
   isDirty: { file: string }
   show: { file: string }
-  edit: { file: string; offset: number; deleteLength: number; text: string; options: EditOptions }
+  /**
+   * `seen` is the `version` of the file's last `userEdit` the host had when it planned the edit. The programmer's
+   * changes after that one are the plugin's to shift it through, as if the edit had come first, as `core` assumes.
+   */
+  edit: { file: string; offset: number; deleteLength: number; text: string; options: EditOptions; seen: number }
   save: { file: string }
   runCommand: { command: string; cwd: string; waitMs: number }
   /** Not an `EditorPort` method: the host changed these files on disk (the demo's setup), so bring the IDE up to date. */
@@ -59,7 +63,8 @@ export type Notices = {
 
 /** What the programmer does, for the controller. */
 export type Commands = {
-  userEdit: { file: string; before: string; changes: Change[] }
+  /** `version` counts the programmer's edits to the document, this one included. */
+  userEdit: { file: string; before: string; changes: Change[]; version: number }
   userMessage: { text: string; selection?: SharedSelection }
   userInterrupt: {}
   pause: { reason?: string }

@@ -32,6 +32,7 @@ import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.openapi.vfs.VirtualFile
 import java.io.File
 import java.awt.Point
+import java.util.WeakHashMap
 import kotlin.math.max
 
 /** The host's editor calls and notices (wire.ts's `Calls` and `Notices`), on IntelliJ documents. */
@@ -45,6 +46,7 @@ class PairEditor(private val project: Project, private val host: PairHost) {
 
     /** Set while our own edit is applied, so the listener doesn't report it as the programmer's. */
     private var applying = false
+    private val programmerEdits = WeakHashMap<Document, ProgrammerEdits>()
     var sessionActive = false
         private set
 
@@ -114,6 +116,7 @@ class PairEditor(private val project: Project, private val host: PairHost) {
                 args["deleteLength"].asInt,
                 args["text"].asString,
                 args["options"].asJsonObject["undoStopBefore"].asBoolean,
+                args["seen"].asInt,
             )
             "save" -> JsonNull.INSTANCE.also { VerbatimSave.save(document(file!!)) }
             "refresh" -> refresh(args["files"].asJsonArray.map { it.asString })
@@ -143,12 +146,18 @@ class PairEditor(private val project: Project, private val host: PairHost) {
         return JsonNull.INSTANCE
     }
 
-    private fun edit(document: Document, offset: Int, deleteLength: Int, text: String, newUndoStep: Boolean): JsonElement {
+    /**
+     * The host planned the edit against the document as of the programmer's edit `seen`; any it hasn't seen yet came
+     * after. Core counts its own edit in flight as first, so it lands as if it had been applied before them.
+     */
+    private fun edit(document: Document, offset: Int, deleteLength: Int, text: String, newUndoStep: Boolean, seen: Int): JsonElement {
+        val ours = programmerEdits[document]?.agentFirst(seen, Change(offset, deleteLength, text.length))
+            ?: Change(offset, deleteLength, text.length)
         if (newUndoStep) undoGroup = "ai-pair-${++undoSteps}"
         WriteCommandAction.writeCommandAction(project).withName("AI Pair").withGroupId(undoGroup).run<Exception> {
             applying = true
             try {
-                document.replaceString(offset, offset + deleteLength, text)
+                document.replaceString(ours.offset, ours.offset + ours.deleteLength, text)
             } finally {
                 applying = false
             }
@@ -203,10 +212,12 @@ class PairEditor(private val project: Project, private val host: PairHost) {
             addProperty("deleteLength", event.oldLength)
             addProperty("text", event.newFragment.toString())
         }
+        val edits = programmerEdits.getOrPut(event.document, ::ProgrammerEdits)
         host.command("userEdit", JsonObject().apply {
             addProperty("file", FileUtil.toSystemDependentName(file.path))
             addProperty("before", before.toString())
             add("changes", JsonArray().apply { add(change) })
+            addProperty("version", edits.add(Change(event.offset, event.oldLength, event.newLength)))
         })
     }
 
@@ -293,6 +304,57 @@ class PairEditor(private val project: Project, private val host: PairHost) {
     private fun document(path: String): Document {
         val file = find(path) ?: error("No such file: $path")
         return FileDocumentManager.getInstance().getDocument(file) ?: error("Not a text file: $path")
+    }
+}
+
+/** A change to a document: `length` characters replacing `deleteLength` at `offset`. */
+private data class Change(val offset: Int, val deleteLength: Int, val length: Int) {
+    /** Where a position goes through this change, as core's `mapThrough`: one at its start stays before it. */
+    fun map(pos: Int): Int = when {
+        pos <= offset -> pos
+        pos >= offset + deleteLength -> pos + length - deleteLength
+        else -> offset + length
+    }
+
+    /** `map`'s mirror, for what comes after this change: one at its start is pushed after it. */
+    fun push(pos: Int): Int = if (pos == offset && deleteLength == 0) pos + length else map(pos)
+
+    /** This change, made after `first` instead of before it. */
+    fun after(first: Change): Change {
+        val start = first.push(offset)
+        return Change(start, (first.push(offset + deleteLength) - start).coerceAtLeast(0), length)
+    }
+
+    /** This change, made before `later` instead of after it. */
+    fun before(later: Change): Change {
+        val start = later.map(offset)
+        return Change(start, (later.map(offset + deleteLength) - start).coerceAtLeast(0), length)
+    }
+}
+
+/**
+ * The programmer's edits to a document, numbered as the `userEdit`s that report them, and those the host hasn't seen
+ * yet, rebased on the host's view of the document (what the agent's edits are planned against).
+ */
+private class ProgrammerEdits {
+    private var version = 0
+    private val unseen = ArrayDeque<Pair<Int, Change>>()
+
+    fun add(change: Change): Int {
+        unseen.addLast(++version to change)
+        return version
+    }
+
+    /** The agent's edit, planned as of `seen`, moved through the edits after it; they now follow it. */
+    fun agentFirst(seen: Int, edit: Change): Change {
+        while (unseen.firstOrNull()?.let { it.first <= seen } == true) unseen.removeFirst()
+        var ours = edit
+        for (i in unseen.indices) {
+            val (v, theirs) = unseen[i]
+            unseen[i] = v to theirs.after(ours)
+            ours = ours.before(theirs)
+        }
+        return ours
     }
 }
 
