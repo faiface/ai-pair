@@ -21,8 +21,8 @@ import kotlin.io.path.Path
 import kotlin.io.path.createTempDirectory
 
 // Runs a real IDE with the plugin (Starter), plays the programmer in it (Driver) and the agent through the launcher, as
-// VS Code's test/integration.ts does in VS Code: the demo, a programmer edit interrupting, the agent's file saved
-// verbatim (its own saves and the IDE's autosave), taking and handing back the turn, and a `run`. Changes by others
+// VS Code's test/integration.ts does in VS Code: the demo, a programmer edit interrupting, undo in steps, the agent's
+// file saved verbatim (its own saves and the IDE's autosave), taking and handing back the turn, and a `run`. Changes by others
 // aren't reported as such yet (see the plan's Known bugs), so VS Code's scenario for them isn't here.
 // ./gradlew integrationTest -PplatformPath=<IDE>: one IDE start, about a minute and a half.
 
@@ -144,8 +144,21 @@ class IntegrationTest {
         assertTrue(Regex("""Batch \d+ discarded\.""").containsMatchIn(report), report)
         assertEquals("X$typed", ide.buffer("scratch.txt"))
         assertTrue("1  X$typed▌\n   (end of file, with no newline after the last line)" in report, report)
-        call("end", """{"summary": "Bye."}""")
         println("interrupted after typing \"$typed\"")
+
+        // Undo takes back the programmer's keystroke and the agent's cut typing as a step each. A keystroke of the
+        // agent's already on its way when the programmer typed lands after it, as a step of its own.
+        val undone = mutableListOf(ide.buffer("scratch.txt"))
+        while (undone.last().isNotEmpty() && undone.size < 5) {
+            ide.undo("scratch.txt")
+            undone += ide.buffer("scratch.txt")
+        }
+        assertEquals("", undone.last(), "undone: $undone")
+        assertTrue(undone.size <= 4, "undone: $undone")
+        assertTrue(undone.zipWithNext().any { (before, after) -> before == "X$after" }, "the programmer's X, as a step: $undone")
+        assertTrue(undone[undone.size - 2].length > 1, "the agent's typing, as a step: $undone")
+        call("end", """{"summary": "Bye."}""")
+        println("undone in steps: $undone")
 
         // Saves keep what the agent typed, though IntelliJ strips trailing spaces on save by default: a strip would
         // be an edit the agent didn't make, and the batch planned behind it would be discarded. Its own saves, and
@@ -167,6 +180,29 @@ class IntegrationTest {
         call("end", """{"summary": "Bye."}""")
         println("the agent's saves are verbatim")
         ide.command("setSpeed", """{"speed": 20}""")
+
+        // Each editing action is one undo step (PROTOCOL.md): `type`, `type_fast`, and `delete`.
+        call("start", """{"task": "undo"}""")
+        step("""[
+            {"move": {"file": "undo.txt", "line": 1, "to": "line_end"}},
+            {"type": "one ▌"},
+            {"type_fast": "two ▌"},
+            {"type": "three\nfour▌"}
+        ]""")
+        assertTrue(COMPLETED.containsMatchIn(step()))
+        // In a batch of its own: the agent may only name a line it has seen in a report.
+        step("""[{"select": {"line": 1, "text": "two "}}, {"delete": true}]""")
+        val played = step()
+        assertTrue(COMPLETED.containsMatchIn(played), played)
+        val steps = mutableListOf(ide.buffer("undo.txt"))
+        repeat(4) {
+            ide.undo("undo.txt")
+            steps += ide.buffer("undo.txt")
+        }
+        assertEquals(listOf("one three\nfour", "one two three\nfour", "one two ", "one ", ""), steps)
+        assertTrue("The programmer edited undo.txt:" in step(), "undoing is the programmer's edit")
+        call("end", """{"summary": "Bye."}""")
+        println("one undo step per action")
 
         // The programmer takes the turn, edits, and hands it back; the agent's next move still lands where it meant.
         call("start", """{"task": "turns"}""")
