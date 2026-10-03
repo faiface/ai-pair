@@ -1,4 +1,4 @@
-# <img src="packages/vscode/media/icon.png" alt="" width="36" align="absmiddle"> AI Pair Programmer
+# <img src="packages/vscode/media/icon.png" alt="" width="40" align="top"> AI Pair Programmer
 
 ## For those of us who want, need, or love to stay close to the code
 
