@@ -21,6 +21,7 @@ object AgentSetup {
      * Writes a launcher at a fixed path that runs this plugin's relay with Node, so the agent's MCP configuration never
      * changes. VS Code's extension writes the same file; either one works, as long as both ship the same relay.
      */
+    @JvmStatic // Static for the integration test, which writes it the way VS Code's test reads its `launcher`.
     fun writeLauncher(): File {
         val home = System.getenv("AI_PAIR_HOME")?.let(::File) ?: File(System.getProperty("user.home"), ".ai-pair")
         val bin = File(home, "bin").apply { mkdirs() }
