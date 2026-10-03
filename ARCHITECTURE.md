@@ -36,6 +36,34 @@ Status: **draft**.
 - **The narration panel** is a webview. It talks to the extension via
   `postMessage`.
 
+### In JetBrains IDEs
+
+```
+agent harness ──stdio (MCP)──▶ pair-mcp ──WebSocket──▶ Node sidecar ──stdio──▶ JetBrains plugin
+                                                       (core)                  (adapter, panel)
+```
+
+- **The Node sidecar** (`packages/intellij-host`) runs the same core, WebSocket
+  server and discovery as the extension, in a Node process the plugin starts
+  for each open project. It implements the core's editor and panel interfaces
+  as remote stubs: each call (an edit, a save, a command to run) goes to the
+  plugin and waits for its answer, and rendering and narration are notices
+  that don't. The protocol is one JSON object per line over the sidecar's
+  stdin and stdout, typed in [`wire.ts`](packages/intellij-host/src/wire.ts).
+  To `pair-mcp`, a JetBrains window looks just like a VS Code one.
+- **The plugin** (`packages/intellij`, Kotlin) is the adapter. It applies the
+  agent's edits as commands, one undo step per action, and draws the cursor,
+  selection and points as highlighters. It reports the programmer's changes,
+  and apart from them, reloads from disk and changes during the agent's own
+  save. Each document's changes are numbered, so an agent edit already on its
+  way lands as if it had come first, as the core assumes. `run` plays in an
+  *AI Pair* tab of the Terminal, captured through the Terminal plugin's
+  (experimental) API and shell integration.
+- **The narration panel** is the extension's own page, which the sidecar hands
+  to the plugin, in a JCEF browser in the *AI Pair* tool window. The plugin
+  maps the IDE's theme onto the page's VS Code theme variables, and forwards
+  the page's messages to the sidecar.
+
 ### Why a relay
 
 Every harness supports stdio MCP servers, and a stdio config is static: "run
@@ -50,11 +78,16 @@ later become a separate process with thin editor clients (like a language
 server with document sync), which may be needed for Zed. That move wouldn't
 change the protocol.
 
+The JetBrains plugin makes that move (see above): an IDE runs on the JVM, with
+no JavaScript runtime to run the core in. A Kotlin port of the core was the
+alternative, but it would be a second copy of an intricate state machine to
+keep in step by hand.
+
 ## Discovery and connection
 
-**Each VS Code window registers itself.** On activation, the extension starts a
-WebSocket server on a random port bound to `127.0.0.1`, and writes a discovery
-file:
+**Each editor window registers itself.** On activation, the extension (in a
+JetBrains IDE, the project's sidecar) starts a WebSocket server on a random
+port bound to `127.0.0.1`, and writes a discovery file:
 
 ```jsonc
 // ~/.ai-pair/windows/<pid>.json   (mode 0600)
@@ -68,7 +101,10 @@ file:
 }
 ```
 
-The file is removed on deactivation.
+The file is removed on deactivation (the sidecar's, when the project closes).
+A JetBrains window reports only its project's base folder for now, and doesn't
+update `lastFocused` yet, so it loses ties to a VS Code window on the same
+folder.
 
 **The relay finds its window lazily**, when a session starts, not at launch. The
 editor may be opened after the harness. To find the window it:
@@ -85,8 +121,9 @@ editor may be opened after the harness. To find the window it:
    a tie, it picks the most recently focused.
 4. Connects and authenticates with the token and protocol version.
 
-If no window matches, `start` fails with a clear message: "Open
-`/Users/me/projects/todo-app` in VS Code with the extension installed."
+If no window matches, `start` fails with a clear message: "No editor window has
+`/Users/me/projects/todo-app` open. Ask the programmer to open it in VS Code or
+a JetBrains IDE with AI Pair installed."
 
 **Relay ↔ extension messages** are JSON-RPC over the WebSocket, mirroring the
 MCP tool calls one to one:
@@ -154,6 +191,11 @@ For any other harness it copies the config snippet to the clipboard. The
 extension offers this once, the first time it starts. The harnesses and their
 files are in [`agents.ts`](packages/vscode/src/agents.ts).
 
+In a JetBrains IDE, *Tools → AI Pair → Set Up Agent* offers fewer choices for
+now: Claude Code for all projects (`claude mcp add --scope user`, run in a
+terminal tab), Claude Code for this project (`.mcp.json`), or the config
+snippet on the clipboard. The plugin also offers it once, on its first start.
+
 **Each session.** The programmer asks the agent to pair ("let's pair on adding
 a todos API, I'm new to Express"), or runs the server's `start` prompt (in
 Claude Code: `/mcp__pair__start`). The agent calls `start`, which returns the
@@ -174,6 +216,14 @@ extension writes a launcher at a fixed path, `~/.ai-pair/bin/pair-mcp`
 the relay with VS Code's own runtime (`ELECTRON_RUN_AS_NODE=1`), so the
 programmer doesn't need Node installed.
 
+The JetBrains plugin ships the same relay, bundled together with the sidecar
+(`host/relay.cjs` and `host/intellij-host.cjs` in the plugin's folder), and
+writes the same launcher when the programmer sets up an agent. An IDE's
+runtime is a JVM, so the launcher and the sidecar run on Node from the `PATH`
+instead, and the programmer needs Node 20 or newer. The launcher runs the
+relay of whichever editor wrote it last, which is fine as long as both ship
+the same one.
+
 ## Repository layout
 
 ```
@@ -184,10 +234,16 @@ packages/
   relay/      pair-mcp: stdio MCP ↔ WebSocket; tool schemas, instructions,
               the start prompt; bundles AGENT_GUIDE.md at build time
   vscode/     the extension: adapter, panel, launcher, setup; ships the relay
+  intellij-host/
+              the JetBrains plugin's sidecar: the core behind remote editor and
+              panel interfaces, speaking to the plugin over stdio
+  intellij/   the JetBrains plugin: adapter, panel, terminal, launcher, setup,
+              settings; ships the sidecar and the relay
 ```
 
-TypeScript throughout, npm workspaces, bundled with esbuild. The relay uses
-the official MCP TypeScript SDK.
+TypeScript throughout, npm workspaces, bundled with esbuild, except the
+JetBrains plugin: Kotlin, built with Gradle and the IntelliJ Platform Gradle
+Plugin. The relay uses the official MCP TypeScript SDK.
 
 ## Out of scope for v1
 
