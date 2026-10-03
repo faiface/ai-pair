@@ -6,6 +6,11 @@
   "publisher": "ai-pair",
   "private": true,
   "license": "MIT",
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#1F1F1F",
+    "theme": "dark"
+  },
   "engines": {
     "vscode": "^1.105.0"
   },
