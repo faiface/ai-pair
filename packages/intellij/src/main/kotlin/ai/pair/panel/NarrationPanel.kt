@@ -7,28 +7,40 @@ import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.google.gson.JsonPrimitive
+import com.intellij.ide.BrowserUtil
 import com.intellij.ide.ui.LafManagerListener
+import com.intellij.notification.NotificationGroupManager
+import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
+import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.components.service
 import com.intellij.openapi.editor.colors.EditorColorsListener
 import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
+import com.intellij.openapi.ui.popup.JBPopupFactory
+import com.intellij.openapi.ui.popup.util.BaseListPopupStep
 import com.intellij.openapi.util.io.FileUtil
 import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.wm.ToolWindowManager
+import com.intellij.psi.search.FilenameIndex
+import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.jcef.JBCefApp
 import com.intellij.ui.jcef.JBCefBrowser
 import com.intellij.ui.jcef.JBCefJSQuery
+import com.intellij.util.concurrency.AppExecutorUtil
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
 import java.awt.Color
 import java.io.File
+import javax.swing.Icon
 import javax.swing.JComponent
 
 /** The narration panel: VS Code's panel page in a JCEF browser, its buttons forwarded to the host as commands. */
@@ -136,7 +148,18 @@ class NarrationPanel(private val project: Project, private val host: PairHost) :
             "end" -> host.command("endSession")
             "runDecision" -> host.command("decideRun", m)
             "open" -> ApplicationManager.getApplication().invokeLater { open(m["file"].asString, m["line"].asInt) }
+            "openFile" -> ApplicationManager.getApplication().invokeLater({ openByName(m["file"].asString) }, project.disposed)
+            "openUrl" -> m["url"].asString.takeIf { it.startsWith("http://") || it.startsWith("https://") }?.let(BrowserUtil::browse)
+            // The intro's commands, as the IDE's own actions: Tools > AI Pair, with their checks.
+            "command" -> PANEL_ACTIONS[m["command"].asString]?.let { id ->
+                ApplicationManager.getApplication().invokeLater({ runAction(id) }, project.disposed)
+            }
         }
+    }
+
+    private fun runAction(id: String) {
+        val manager = ActionManager.getInstance()
+        manager.tryToExecute(manager.getAction(id) ?: return, null, browser?.component, PLACE, true)
     }
 
     /** The page's message, plus the programmer's selection if it asked to attach it. */
@@ -152,9 +175,41 @@ class NarrationPanel(private val project: Project, private val host: PairHost) :
 
     /** Opens a file the page names, relative to the project or absolute, at a line. */
     private fun open(file: String, line: Int) {
-        val path = if (File(file).isAbsolute) file else File(project.basePath ?: return, file).path
-        val vf = LocalFileSystem.getInstance().findFileByPath(FileUtil.toSystemIndependentName(path)) ?: return
+        val vf = find(file) ?: return
         OpenFileDescriptor(project, vf, (line - 1).coerceAtLeast(0), 0).navigate(true)
+    }
+
+    /** A file relative to the project, or absolute. */
+    private fun find(file: String): VirtualFile? {
+        val path = if (File(file).isAbsolute) file else File(project.basePath ?: return null, file).path
+        return LocalFileSystem.getInstance().findFileByPath(FileUtil.toSystemIndependentName(path))
+    }
+
+    /** Opens a file the agent named: as a path in the project, else the file of that name, asking if there are several. */
+    private fun openByName(name: String) {
+        find(name)?.takeUnless { it.isDirectory }?.let { return OpenFileDescriptor(project, it).navigate(true) }
+        // Not a path from the project's root: look for it by name, as VS Code's `**/name`.
+        ReadAction.nonBlocking<List<VirtualFile>> {
+            FilenameIndex.getVirtualFilesByName(name.substringAfterLast('/'), GlobalSearchScope.projectScope(project))
+                .filter { it.path.endsWith("/$name") && "/node_modules/" !in it.path }
+                .sortedBy { it.path }
+                .take(MAX_FOUND)
+        }.inSmartMode(project).expireWith(this).finishOnUiThread(ModalityState.nonModal()) { found ->
+            when (found.size) {
+                0 -> NotificationGroupManager.getInstance().getNotificationGroup("AI Pair")
+                    .createNotification("AI Pair: couldn't find $name in the project.", NotificationType.INFORMATION)
+                    .notify(project)
+                1 -> OpenFileDescriptor(project, found[0]).navigate(true)
+                // The IDE's own file chooser look, file-type icons included, where VS Code has a plain quick pick.
+                else -> JBPopupFactory.getInstance().createListPopup(object : BaseListPopupStep<VirtualFile>("Which $name?", found) {
+                    override fun getTextFor(value: VirtualFile) = FileUtil.getRelativePath(project.basePath ?: "", value.path, '/') ?: value.path
+                    override fun getIconFor(value: VirtualFile): Icon? = value.fileType.icon
+                    override fun isSpeedSearchEnabled() = true
+                    override fun onChosen(selectedValue: VirtualFile, finalChoice: Boolean) =
+                        doFinalStep { OpenFileDescriptor(project, selectedValue).navigate(true) }
+                }).showCenteredInCurrentWindow(project)
+            }
+        }.submit(AppExecutorUtil.getAppExecutorService())
     }
 
     override fun dispose() {}
@@ -197,6 +252,12 @@ class NarrationPanel(private val project: Project, private val host: PairHost) :
         const val ID = "AI Pair"
         private const val MAX_LOG = 400
         private const val THEME = "ai-pair-theme"
+        /** Files found by name, at most: VS Code's limit. */
+        private const val MAX_FOUND = 20
+        private const val PLACE = "AiPairPanel"
+
+        /** The commands the page may run, VS Code's ids to this plugin's actions: the ones its intro links to. */
+        private val PANEL_ACTIONS = mapOf("aiPair.playDemo" to "ai.pair.PlayDemo", "aiPair.setUpAgent" to "ai.pair.SetUpAgent")
     }
 }
 
