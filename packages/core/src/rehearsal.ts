@@ -113,6 +113,7 @@ class MemoryEditor implements EditorPort {
   renderCursor(): void {}
   renderPoint(): void {}
   reveal(): void {}
+  follow(): void {}
 
   async runCommand(): Promise<CommandOutcome> {
     return { exitCode: 0, output: "" }

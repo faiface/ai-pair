@@ -74,6 +74,10 @@ export class FakeEditor implements EditorPort {
   reveal(): void {
     this.reveals++
   }
+  follows = 0
+  follow(): void {
+    this.follows++
+  }
 
   /** `unsaved`: the files with unsaved changes when the command started. */
   commands: { command: string; options: RunOptions; unsaved: string[] }[] = []

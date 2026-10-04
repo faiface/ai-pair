@@ -65,6 +65,8 @@ export interface EditorPort {
   renderPoint(point: { file: string; start: number; end: number } | null): void
   /** Brings the programmer's view back to what it follows. */
   reveal(): void
+  /** Keeps what the view follows in view, after a keystroke, move, selection or point of the agent changed it. */
+  follow(): void
   /** Runs a command in a terminal the programmer can see. */
   runCommand(command: string, options: RunOptions): Promise<CommandOutcome>
 }

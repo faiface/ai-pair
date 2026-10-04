@@ -186,14 +186,24 @@ edits without undo stops between them, with stops at the action's boundaries.
 
 During the agent's turn:
 
-- The view follows the agent cursor across files.
+- The view follows the agent cursor across files, as the agent types,
+  deletes, moves, selects and points. Nothing else moves the view: not a
+  `say`, and not the programmer's edits shifting the cursor.
 - **After a `point`, it follows the pointed code instead**, so the narration
   about it plays while it's in view. The next action at the cursor (a move, a
   selection, typing or a deletion) brings the view back to the cursor; after
   a far `point`, with the pause of a far move first.
-- What the view follows is kept in the **upper third of the viewport**, so it
-  sits roughly level with the narration panel's current message. The view
-  scrolls only when it leaves a comfortable band, not on every keystroke.
+- What the view follows is kept in the **middle half of the viewport**. When
+  it gets into the top or bottom quarter, or out of view, the view scrolls to
+  put it **a third of the way down**, roughly level with the narration
+  panel's current message. So typing downward scrolls every 40% of a
+  viewport or so, not on every keystroke, and every jump lands in the same
+  place. At the top of a file, it sits as low as the file lets it.
+- The viewport's height comes from the lines VS Code shows. Near the end of a
+  file those stop at its last line, short of the viewport's bottom, and a
+  zoom or a resize there changes nothing VS Code reports. So a scroll there
+  first centers the target, which VS Code can do knowing its viewport, and
+  measures the height from where it landed, then goes on to a third.
 - Playback **pauses automatically** when the programmer switches to another
   editor or scrolls what the view follows out of view. Scrolling caused by
   follow mode itself is ignored.

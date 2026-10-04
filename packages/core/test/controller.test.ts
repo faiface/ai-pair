@@ -630,6 +630,22 @@ describe("pointing", () => {
     expect(editor.point).toMatchObject({ file: editor.resolvePath("b.ts") })
     expect(editor.focus).toBe("cursor")
     expect(editor.shown).toEqual([editor.resolvePath("a.ts")])
+    expect(editor.follows).toBe(1)
+  })
+
+  it("follows the agent's keystrokes, moves, selections and points, not what it says", async () => {
+    const { editor, controller } = setup({ "a.ts": "a\nb\n" })
+    await controller.start()
+    await controller.read("a.ts")
+    await until(controller.step([{ move: { file: "a.ts", line: 1, to: "line_end" } }]))
+    await until(controller.step([]))
+    expect(editor.follows).toBe(1)
+    await until(controller.step([{ say: "Now the rest." }]))
+    await until(controller.step([]))
+    expect(editor.follows).toBe(1)
+    await until(controller.step([{ type: "xy▌" }, { select: { line: 2, text: "b" } }, { point: { line: 1, text: "axy" } }]))
+    await until(controller.step([]))
+    expect(editor.follows).toBe(5)
   })
 
   it("brings back what the view follows on resume", async () => {

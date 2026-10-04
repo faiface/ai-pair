@@ -246,6 +246,12 @@ export class Player {
     return result
   }
 
+  /** Shows a change to the cursor, or to what the view follows, and keeps it in the programmer's view. */
+  private follow(): void {
+    this.stage.render()
+    if (this.scene.turn === "agent") this.stage.editor.follow()
+  }
+
   private delay(ms: number): Promise<boolean> {
     return this.stage.pacing.sleep(ms / this.stage.speed())
   }
@@ -273,10 +279,10 @@ export class Player {
       s.focus = "cursor"
       if (farBack && !("move" in action) && named === undefined && s.cursor) {
         await editor.show(s.cursor.file)
-        this.stage.render()
+        this.follow()
         if (!(await this.delay(timing.afterMoveFarMs))) return { kind: "interrupted" }
       }
-      this.stage.render()
+      this.follow()
     }
 
     if ("say" in action) {
@@ -318,7 +324,7 @@ export class Player {
       s.cursor = { file, offset }
       s.selection = null
       playing.moved = true
-      this.stage.render()
+      this.follow()
       // The pause is after the move, so the programmer sees where the cursor went before anything happens there.
       await this.delay(near ? timing.afterMoveNearMs : timing.afterMoveFarMs)
       return ok
@@ -337,7 +343,7 @@ export class Player {
       s.cursor = { file, offset: span.end }
       s.selection = { start: span.start, end: span.end }
       playing.moved = true
-      this.stage.render()
+      this.follow()
       await this.delay(timing.afterSelectMs)
       return ok
     }
@@ -363,7 +369,7 @@ export class Player {
       s.selection = null
       this.touch(playing, file, start, end - start, 0)
       await this.edit(file, { offset: start, deleteLength: end - start, text: "" }, { undoStopBefore: true, undoStopAfter: true })
-      this.stage.render()
+      this.follow()
       await this.delay(timing.afterDeleteMs)
       return ok
     }
@@ -386,7 +392,7 @@ export class Player {
         s.focus = "point"
       }
       editor.renderPoint(s.point)
-      this.stage.render()
+      this.follow()
       panel.post({ type: "point", file: editor.displayPath(file), line: pointLine })
       await this.delay(timing.afterPointMs)
       return ok
@@ -514,14 +520,14 @@ export class Player {
         undoStopAfter: i === chunks.length - 1,
       })
       typed += chunk.text
-      this.stage.render()
+      this.follow()
     }
     if (after !== "") {
       // Into the pair just closed: a move within sight, so the same beat before it, and pause after,
       // as one. Interrupted, it still steps back: all of the text was typed.
       await this.delay(timing.beforeMoveMs * scale)
       cursor.offset -= eol === "\n" ? after.length : after.replaceAll("\n", eol).length
-      this.stage.render()
+      this.follow()
       await this.delay(timing.afterMoveNearMs * scale)
     }
     return ok

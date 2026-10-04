@@ -30,6 +30,12 @@ const FOLLOWING: ReadonlySet<AgentState> = new Set(["typing", "read", "thinking"
 /** View changes within this long after our own navigation are ours, not the programmer's. */
 const SELF_NAV_MS = 400
 
+/** With smooth scrolling, our own scroll has finished once the visible ranges stay unchanged this long. */
+const SCROLL_QUIET_MS = 50
+
+/** The longest we wait for our own scroll to finish. */
+const SCROLL_MAX_MS = 500
+
 /** A shared selection is cut off here; the agent can `read` the rest. */
 const MAX_EXCERPT = 8000
 
@@ -51,6 +57,21 @@ function labelDecoration(text: string, color: string, foreground: string, opacit
       textDecoration: `none; position: absolute; transform: translateY(-105%); z-index: 10; pointer-events: none; padding: 0 4px; border-radius: 3px; font-size: 0.75em; line-height: 1.35; white-space: nowrap; background-color: ${color}; color: ${foreground}; opacity: ${opacity};`,
     },
   })
+}
+
+/**
+ * Where `line` is in the view: how many visible lines are above it, negative above the view, and as
+ * many as there are visible lines, or more, below it. Folded lines don't count.
+ */
+function row(ranges: readonly vscode.Range[], line: number): number {
+  const first = ranges[0]!.start.line
+  if (line < first) return line - first
+  let above = 0
+  for (const r of ranges) {
+    if (line <= r.end.line) return above + Math.max(0, line - r.start.line)
+    above += r.end.line - r.start.line + 1
+  }
+  return above + line - ranges.at(-1)!.end.line - 1
 }
 
 const CURSOR = "var(--vscode-aiPair-cursor)"
@@ -76,8 +97,13 @@ export class VsCodeEditor implements EditorPort, vscode.Disposable {
   private pulse?: ReturnType<typeof setInterval>
   private pulseOn = true
   private selfNavUntil = 0
-  /** How many lines each editor group's viewport shows, as of the last time it showed no document's end. */
+  /**
+   * How many lines each editor group's viewport shows, as last seen without a document's end in view,
+   * or measured. A zoom or a resize since, with a document's end in view, goes unnoticed.
+   */
   private readonly viewportLines = new Map<vscode.ViewColumn | undefined, number>()
+  /** Our own scroll is under way: until it finishes, the visible ranges are the ones from before it. */
+  private scrolling = false
   private readonly disposables: vscode.Disposable[] = []
   private readonly cursorTypes: Record<string, vscode.TextEditorDecorationType>
   private labelTypes: Record<string, vscode.TextEditorDecorationType> = {}
@@ -231,8 +257,6 @@ export class VsCodeEditor implements EditorPort, vscode.Disposable {
       this.updatePulse()
     }
     this.redraw()
-    const target = this.target()
-    if (target && FOLLOWING.has(state)) this.follow(target)
   }
 
   renderPoint(point: { file: string; start: number; end: number } | null): void {
@@ -242,7 +266,12 @@ export class VsCodeEditor implements EditorPort, vscode.Disposable {
 
   reveal(): void {
     const target = this.target()
-    if (target) void this.show(target.file).then(() => this.follow(target, true))
+    if (target) void this.show(target.file).then(() => this.follow())
+  }
+
+  follow(): void {
+    const target = this.target()
+    if (target && FOLLOWING.has(this.state)) this.keepInView(target)
   }
 
   runCommand(command: string, options: RunOptions): Promise<CommandOutcome> {
@@ -369,44 +398,111 @@ export class VsCodeEditor implements EditorPort, vscode.Disposable {
     return this.cursor
   }
 
-  /** Keeps the target in the upper part of the viewport, scrolling only when it leaves a band. */
-  private follow(target: Target, force = false): void {
+  /**
+   * Keeps the target out of the viewport's top and bottom quarters: from there, or from out of view,
+   * scrolls it to a third of the way down. At the top of a file it may have to sit higher.
+   */
+  private keepInView(target: Target): void {
+    if (this.scrolling) return
     const editor = this.visibleEditor(target.file)
-    const visible = editor?.visibleRanges[0]
-    if (!editor || !visible) return
+    const view = editor && this.viewport(editor)
+    if (!editor || !view) return
     const line = editor.document.positionAt(target.offset).line
-    const { atEnd, known } = this.viewport(editor)
-    const shown = Math.max(1, visible.end.line - visible.start.line)
-    const height = atEnd ? Math.max(shown, known ?? 0) : shown
-    const top = visible.start.line + Math.floor(height * 0.1)
-    const bottom = visible.start.line + Math.floor(height * 0.6)
-    // At the top of a file the target can't sit lower in the viewport, and that's fine. At its end,
-    // with the viewport's height unknown, the target is in view: everything to the end is.
-    const inBand = (line <= bottom || (atEnd && known === undefined)) && (line >= top || visible.start.line === 0)
-    if (!force && inBand) return
-    const scrollTo = Math.max(0, line - Math.floor(height / 3))
-    // A reveal at the top leaves room above for sticky scroll or `editor.cursorSurroundingLines`,
-    // up to half the viewport, so reveal that much lower for `scrollTo` to end up at the top.
-    const options = vscode.workspace.getConfiguration("editor", editor.document)
-    const sticky = options.get("stickyScroll.enabled", true) ? options.get("stickyScroll.maxLineCount", 5) : 0
-    const room = Math.floor(Math.min(height / 2, Math.max(options.get("cursorSurroundingLines", 0), sticky)))
-    this.selfNav()
-    editor.revealRange(new vscode.Range(scrollTo + room, 0, scrollTo + room, 0), vscode.TextEditorRevealType.AtTop)
+    const at = row(editor.visibleRanges, line)
+    const { height } = view
+    // Not knowing the height, at a document's end, the target is in view: everything to the end is.
+    if (height === undefined ? at >= 0 : at >= height / 4 && at < (height * 3) / 4) return
+    if (height !== undefined && this.landing(editor, line, height) === view.top) return
+    // At a document's end, the height may be out of date, so measure it on the way.
+    const measure = view.atEnd && this.scrollsBeyondEnd(editor)
+    void this.scroll(editor, line, measure ? undefined : (height ?? view.rows))
   }
 
   /**
-   * Whether the editor's visible range reaches the document's last line, and how many lines its
-   * group's viewport shows, if known. The visible range stops at the last line, so near the end of a
-   * document it's shorter than the viewport: the height is the one the group last showed in full.
+   * Scrolls the target to a third of the way down. Without `height`, first to the middle, which VS
+   * Code can do knowing its viewport, so the lines above it are half of the viewport's; then on, from
+   * where the target is by then. Afterwards, catches up with the target if it moved to another line
+   * meanwhile. Only then: a landing the editor can't reach would otherwise be tried again and again.
    */
-  private viewport(editor: vscode.TextEditor): { atEnd: boolean; known?: number } {
+  private async scroll(editor: vscode.TextEditor, line: number, height?: number): Promise<void> {
+    this.scrolling = true
+    try {
+      if (height === undefined) {
+        await this.revealLine(editor, line, vscode.TextEditorRevealType.InCenter)
+        // Near a document's start, the middle is out of reach and the view stays at its top.
+        if (editor.visibleRanges[0] && editor.visibleRanges[0].start.line > 0) {
+          height = 2 * row(editor.visibleRanges, line)
+          this.viewportLines.set(editor.viewColumn, height)
+        }
+        const target = this.target()
+        if (height === undefined || target?.file !== editor.document.uri.fsPath || !FOLLOWING.has(this.state)) return
+        line = editor.document.positionAt(target.offset).line
+      }
+      // A reveal at the top leaves room above for sticky scroll or `editor.cursorSurroundingLines`,
+      // up to half the viewport, so reveal that much lower for the landing line to end up at the top.
+      const options = vscode.workspace.getConfiguration("editor", editor.document)
+      const sticky = options.get("stickyScroll.enabled", true) ? options.get("stickyScroll.maxLineCount", 5) : 0
+      const room = Math.floor(Math.min(height / 2, Math.max(options.get("cursorSurroundingLines", 0), sticky)))
+      await this.revealLine(editor, this.landing(editor, line, height) + room, vscode.TextEditorRevealType.AtTop)
+    } finally {
+      this.scrolling = false
+    }
+    const target = this.target()
+    if (target?.file !== editor.document.uri.fsPath || editor.document.positionAt(target.offset).line !== line) this.follow()
+  }
+
+  /** The top line of the view that has `line` a third of the way down, as far as the editor can scroll. */
+  private landing(editor: vscode.TextEditor, line: number, height: number): number {
+    const last = editor.document.lineCount - 1
+    const max = this.scrollsBeyondEnd(editor) ? last : Math.max(0, last + 1 - height)
+    return Math.max(0, Math.min(max, line - Math.floor(height / 3)))
+  }
+
+  /** Whether the editor scrolls on past a document's last line, up to where it's the top one. */
+  private scrollsBeyondEnd(editor: vscode.TextEditor): boolean {
+    return vscode.workspace.getConfiguration("editor", editor.document).get("scrollBeyondLastLine", true)
+  }
+
+  /**
+   * Reveals a line, and waits for the scroll to finish, so the visible ranges are the new ones. Without
+   * smooth scrolling, that's their first change: waiting any longer would show a measuring stop.
+   */
+  private revealLine(editor: vscode.TextEditor, line: number, type: vscode.TextEditorRevealType): Promise<void> {
+    const smooth = vscode.workspace.getConfiguration("editor", editor.document).get("smoothScrolling", false)
+    return new Promise((resolve) => {
+      const done = () => {
+        clearTimeout(quiet)
+        clearTimeout(max)
+        changes.dispose()
+        resolve()
+      }
+      let quiet = setTimeout(done, SCROLL_QUIET_MS)
+      const max = setTimeout(done, SCROLL_MAX_MS)
+      const changes = vscode.window.onDidChangeTextEditorVisibleRanges((e) => {
+        if (e.textEditor !== editor) return
+        if (!smooth) return done()
+        clearTimeout(quiet)
+        quiet = setTimeout(done, SCROLL_QUIET_MS)
+      })
+      this.selfNav()
+      editor.revealRange(new vscode.Range(line, 0, line, 0), type)
+    })
+  }
+
+  /**
+   * The editor's view: its top line, how many lines it shows, and how many its viewport fits, if
+   * known. At a document's end the visible ranges stop at its last line, short of the viewport's
+   * bottom, so there the height is the one last seen or measured.
+   */
+  private viewport(editor: vscode.TextEditor): { top: number; rows: number; atEnd: boolean; height?: number } | undefined {
     const ranges = editor.visibleRanges
-    const visible = ranges[0]
-    if (!visible) return { atEnd: false, known: this.viewportLines.get(editor.viewColumn) }
+    if (ranges.length === 0) return undefined
+    const rows = ranges.reduce((n, r) => n + r.end.line - r.start.line + 1, 0)
     const atEnd = ranges.at(-1)!.end.line >= editor.document.lineCount - 1
-    // Not with folded code in view: its hidden lines would count.
-    if (!atEnd && ranges.length === 1) this.viewportLines.set(editor.viewColumn, visible.end.line - visible.start.line)
-    return { atEnd, known: this.viewportLines.get(editor.viewColumn) }
+    if (!atEnd) this.viewportLines.set(editor.viewColumn, rows)
+    const known = this.viewportLines.get(editor.viewColumn)
+    const height = !atEnd ? rows : known === undefined ? undefined : Math.max(rows, known)
+    return { top: ranges[0]!.start.line, rows, atEnd, height }
   }
 
   private redraw(): void {
