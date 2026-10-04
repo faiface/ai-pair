@@ -23,7 +23,7 @@ export type Timing = {
   type: Cadence
   /** `type_fast` plays the same cadence, with every delay multiplied by this. */
   fastFactor: number
-  /** After a `say`: enough to read most of the message, not all of it. */
+  /** After a `say`: enough to read the message at an ordinary pace. */
   reading: Reading
   /** Before a move, so the jump doesn't look instantaneous. */
   beforeMoveMs: number
@@ -52,7 +52,7 @@ export const defaultTiming: Timing = {
     newlineMs: 350,
   },
   fastFactor: 0.25,
-  reading: { msPerWord: 180, minMs: 1000, maxMs: 6000 },
+  reading: { msPerWord: 270, minMs: 1500, maxMs: 9000 },
   beforeMoveMs: 150,
   afterMoveNearMs: 450,
   afterMoveFarMs: 900,

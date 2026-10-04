@@ -170,8 +170,8 @@ the close typed before the cursor leaves it, and the pause after it.
 `type_fast` shortens both by the same factor as its typing. With nothing
 after the `▌`, the cursor is already in place and there's neither.
 
-**Reading.** After a `say`: `clamp(words × 180, 1000, 6000)`. Enough to read
-most of the message, not all of it.
+**Reading.** After a `say`: `clamp(words × 270, 1500, 9000)`. Enough to read
+the message at an ordinary pace, about 220 words a minute.
 
 **Speed.** The panel's speed menu (0.4×, 0.6×, 1.0×, 1.5×, 2.0×, 3.0×) scales
 all of it together, immediately, even mid-typing. It's the `aiPair.speed`

@@ -239,8 +239,8 @@ until the next `say`, then moves into the history. Inline code in backticks is
 rendered as code.
 
 After a `say`, playback **pauses for a reading time** proportional to the
-message length, so the programmer can read most of it before the actions it
-describes begin.
+message length, so the programmer can read it before the actions it describes
+begin.
 
 Keep messages short: one to three sentences. Split longer explanations across
 batches.
