@@ -34,7 +34,7 @@ through code you don't know yet.
 
 **Ask it to explain code line by line**
 
-![The programmer selects a function and asks for an explanation, and the agent walks through it, highlighting each line](media/explain-line-by-line.gif)
+![The agent walks through a function line by line, highlighting each line and explaining it in the Pair panel](media/explain-line-by-line.gif)
 
 It works in VS Code, with the coding agent you already use. Setup is built in
 for Claude Code, Codex, OpenCode, Gemini CLI, Cursor and GitHub Copilot, and
