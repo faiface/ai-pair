@@ -106,6 +106,27 @@ interface TextEditorProvider {
     fun getTextEditor(editor: Editor): FileEditor
 }
 
+@Remote("com.intellij.openapi.wm.ToolWindowManager")
+interface ToolWindowManager {
+    fun getToolWindow(id: String): ToolWindow?
+}
+
+@Remote("com.intellij.openapi.wm.ToolWindow")
+interface ToolWindow {
+    fun getContentManager(): ContentManager
+}
+
+@Remote("com.intellij.ui.content.ContentManager")
+interface ContentManager {
+    fun getContentCount(): Int
+    fun getContent(index: Int): Content?
+}
+
+@Remote("com.intellij.ui.content.Content")
+interface Content {
+    fun getDisplayName(): String?
+}
+
 /** What the programmer does in the IDE, and what it shows them. */
 class Programmer(private val driver: Driver, private val project: Project, private val root: File) {
     val host = driver.service(PairHost::class, project)
@@ -146,6 +167,12 @@ class Programmer(private val driver: Driver, private val project: Project, priva
     fun undo(name: String) {
         val editor = driver.utility(TextEditorProviders::class).getInstance().getTextEditor(inFront(name))
         driver.withWriteAction { utility(UndoManagers::class).getInstance(project).undo(editor) }
+    }
+
+    /** The names of the Terminal's tabs. */
+    fun terminalTabs(): List<String?> = driver.withContext(OnDispatcher.EDT) {
+        val tabs = service(ToolWindowManager::class, project).getToolWindow("Terminal")?.getContentManager() ?: return@withContext emptyList()
+        (0 until tabs.getContentCount()).map { tabs.getContent(it)?.getDisplayName() }
     }
 
     private fun inFront(name: String): Editor {

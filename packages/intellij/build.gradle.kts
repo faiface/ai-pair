@@ -31,6 +31,9 @@ dependencies {
         bundledModule("intellij.terminal.frontend")
         testFramework(TestFrameworkType.Starter, configurationName = integrationTest.implementationConfigurationName)
     }
+    // Unit tests (src/test): plain functions, no IDE.
+    testImplementation("org.junit.jupiter:junit-jupiter:5.13.4")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.13.4")
     integrationTest.implementationConfigurationName(kotlin("stdlib"))
     integrationTest.implementationConfigurationName("org.junit.jupiter:junit-jupiter:5.13.4")
     integrationTest.runtimeOnlyConfigurationName("org.junit.platform:junit-platform-launcher:1.13.4")
@@ -57,6 +60,10 @@ kotlin {
     compilerOptions {
         jvmTarget = JvmTarget.JVM_21
     }
+}
+
+tasks.test {
+    useJUnitPlatform()
 }
 
 // The Node host (packages/intellij-host), shipped next to the plugin's jars as host/intellij-host.cjs.

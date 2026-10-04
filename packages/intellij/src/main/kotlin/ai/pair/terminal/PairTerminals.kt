@@ -52,7 +52,7 @@ class PairTerminals(private val project: Project) {
 
     private fun start(run: Run, command: String, cwd: String, waitMs: Long, shell: List<String>) {
         if (run.answered) return
-        val tab = acquire(cwd, shell)
+        val (tab, line) = acquire(command, cwd, shell)
         tab.busy = true
         ToolWindowManager.getInstance(project).getToolWindow("Terminal")?.show()
         val view = tab.tab.view
@@ -64,7 +64,7 @@ class PairTerminals(private val project: Project) {
             }
             if (integration == null) {
                 // Without shell integration we can't tell when it ends, so the tab is never reused.
-                view.createSendTextBuilder().shouldExecute().send(command)
+                view.createSendTextBuilder().shouldExecute().send(line)
                 return@launch run.answer(JsonObject().apply { addProperty("output", "[output not captured: this terminal has no shell integration]") })
             }
 
@@ -87,25 +87,44 @@ class PairTerminals(private val project: Project) {
                     run.answer(outcome(block.getOutputText(event.outputModel), block.exitCode, running = false, tab.shell))
                 }
             })
-            view.createSendTextBuilder().shouldExecute().send(command)
+            view.createSendTextBuilder().shouldExecute().send(line)
             delay(waitMs)
             run.finish(ended = false)
         }
     }
 
-    /** A free tab of ours in [cwd], or a new one running [configured], the Terminal's shell. */
-    private fun acquire(cwd: String, configured: List<String>): Owned {
+    /**
+     * A free tab of ours, and what to type in it to run [command] in [cwd]: a tab in [cwd], else one an earlier command
+     * left in another directory (`cd sub; …`), moved back as part of the command, else a new one running [configured],
+     * the Terminal's shell.
+     */
+    private fun acquire(command: String, cwd: String, configured: List<String>): Pair<Owned, String> {
         val manager = TerminalToolWindowTabsManager.getInstance(project)
         owned.retainAll { it.tab in manager.tabs }
-        owned.firstOrNull { !it.busy && FileUtil.pathsEqual(it.tab.view.getCurrentDirectory() ?: it.cwd, cwd) }?.let { return it }
+        val idle = owned.filter { !it.busy }
+        idle.firstOrNull { FileUtil.pathsEqual(it.tab.view.getCurrentDirectory() ?: it.cwd, cwd) }?.let { return it to command }
+        for (tab in idle) inDirectory(command, cwd, tab.shell)?.let { return tab to it }
         // cmd has no shell integration, so its output could never be captured: the agent's tab uses PowerShell instead.
         val swap = configured.firstOrNull()?.let(::shellName) == "cmd" && TerminalOptionsProvider.instance.shellIntegration
         val shell = if (swap) listOf(POWERSHELL) else configured
         val tab = manager.createTabBuilder().workingDirectory(cwd).apply { if (swap) shellCommand(shell) }
             .tabName("AI Pair").requestFocus(false).createTab()
-        return Owned(tab, cwd, shell.firstOrNull()?.let(::shellName)).also { owned += it }
+        return Owned(tab, cwd, shell.firstOrNull()?.let(::shellName)).also { owned += it } to command
     }
 }
+
+/**
+ * [command] to run in [cwd] in [shell], a [shellName], or null for a shell it can't be written for. One line: the first
+ * command the shell reports after sending is taken as the agent's, so a `cd` sent before it would be taken instead.
+ */
+internal fun inDirectory(command: String, cwd: String, shell: String?): String? = when (shell) {
+    "powershell", "pwsh" -> "Set-Location -LiteralPath '${cwd.replace(POWERSHELL_QUOTE) { it.value + it.value }}'; $command"
+    "bash", "zsh", "sh" -> "cd -- '${cwd.replace("'", "'\\''")}' && $command"
+    else -> null
+}
+
+/** What ends a single-quoted string in PowerShell: `'`, and the typographic single quotes. */
+private val POWERSHELL_QUOTE = Regex("['‘’‚‛]")
 
 /** `bash` for `/bin/bash`, `powershell` for `C:\...\PowerShell.exe`: what the agent writes its commands for. */
 private fun shellName(executable: String) =

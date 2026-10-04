@@ -23,7 +23,7 @@ import kotlin.io.path.createTempDirectory
 // Runs a real IDE with the plugin (Starter), plays the programmer in it (Driver) and the agent through the launcher, as
 // VS Code's test/integration.ts does in VS Code: the demo, a change by a tool reported as not the programmer's, a
 // programmer edit interrupting, undo in steps, the agent's file saved verbatim (its own saves and the IDE's autosave),
-// taking and handing back the turn, and a `run`.
+// taking and handing back the turn, and `run`s, in one tab.
 // ./gradlew integrationTest -PplatformPath=<IDE>: one IDE start, about a minute and a half.
 
 const val EXPECTED_TODOS = """export interface Todo {
@@ -260,7 +260,20 @@ class IntegrationTest {
         step("""[{"run": "echo 'hello from run'"}]""")
         val ran = step()
         assertTrue(Regex("""Ran `echo 'hello from run'` in \w+: exited with 0\. Output:\n```\n[^`]*hello from run\n```""").containsMatchIn(ran), ran)
-        call("end", """{"summary": "Bye."}""")
         println("run captured")
+
+        // A command that leaves the shell in another directory doesn't cost a tab: the next one runs in the same tab,
+        // moved back to the session's directory. `cd` and `cat` are PowerShell's aliases too.
+        File(root, "sub").mkdirs()
+        File(root, "marker.txt").writeText("in the root\n")
+        step("""[{"run": "cd sub; echo 'in sub'"}]""")
+        val moved = step()
+        assertTrue(Regex("""exited with 0\. Output:\n```\n[^`]*in sub\n```""").containsMatchIn(moved), moved)
+        step("""[{"run": "cat marker.txt"}]""")
+        val back = step()
+        assertTrue(Regex("""Ran `cat marker.txt` in \w+: exited with 0\. Output:\n```\n[^`]*in the root\n```""").containsMatchIn(back), back)
+        assertEquals(1, ide.terminalTabs().count { it?.startsWith("AI Pair") == true }, "AI Pair tabs: ${ide.terminalTabs()}")
+        call("end", """{"summary": "Bye."}""")
+        println("one tab for every run")
     }
 }
