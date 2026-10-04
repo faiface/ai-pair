@@ -71,8 +71,8 @@ export function findWindows(folders: string[], dir: string): { folder: string; w
   throw new RelayError(
     "no_editor",
     windows.length === 0
-      ? `No VS Code window with the AI Pair extension is running. Ask the programmer to open ${folders[0]} in VS Code.`
-      : `No VS Code window has ${folders[0]} open. Ask the programmer to open it in VS Code (with the AI Pair extension).`,
+      ? `No editor window with AI Pair is running. Ask the programmer to open ${folders[0]} in VS Code or a JetBrains IDE with AI Pair installed.`
+      : `No editor window has ${folders[0]} open. Ask the programmer to open it in VS Code or a JetBrains IDE with AI Pair installed.`,
   )
 }
 

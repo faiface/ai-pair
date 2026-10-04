@@ -1,0 +1,279 @@
+package ai.pair
+
+import com.intellij.driver.sdk.singleProject
+import com.intellij.ide.starter.di.di
+import com.intellij.ide.starter.driver.engine.runIdeWithDriver
+import com.intellij.ide.starter.ide.IdeProductProvider
+import com.intellij.ide.starter.ide.installer.ExistingIdeInstaller
+import com.intellij.ide.starter.models.TestCase
+import com.intellij.ide.starter.path.GlobalPaths
+import com.intellij.ide.starter.plugins.PluginConfigurator
+import com.intellij.ide.starter.project.LocalProjectInfo
+import com.intellij.ide.starter.runner.Starter
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Test
+import org.kodein.di.DI
+import org.kodein.di.bindSingleton
+import java.io.File
+import java.util.concurrent.TimeUnit
+import kotlin.io.path.Path
+import kotlin.io.path.createTempDirectory
+
+// Runs a real IDE with the plugin (Starter), plays the programmer in it (Driver) and the agent through the launcher, as
+// VS Code's test/integration.ts does in VS Code: the demo, a change by a tool reported as not the programmer's, a
+// programmer edit interrupting, undo in steps, the agent's file saved verbatim (its own saves and the IDE's autosave),
+// taking and handing back the turn, and `run`s, in one tab.
+// ./gradlew integrationTest -PplatformPath=<IDE>: one IDE start, about a minute and a half.
+
+const val EXPECTED_TODOS = """export interface Todo {
+  id: number;
+  title: string;
+  done: boolean;
+}
+
+const todos: Todo[] = [];
+let nextId = 1;
+
+export function createTodo(title: string): Todo {
+  const todo = { id: nextId++, title, done: false };
+  todos.push(todo);
+  return todo;
+}
+
+export function listTodos(): Todo[] {
+  return todos;
+}
+"""
+
+const val EXPECTED_SERVER = """import express from "express";
+import { createTodo, listTodos } from "./todos";
+
+const app = express();
+app.use(express.json());
+
+app.post("/todos", (req, res) => {
+  const todo = createTodo(req.body.title);
+  res.status(201).json(todo);
+});
+
+app.get("/todos", (req, res) => {
+  res.json(listTodos());
+});
+
+app.listen(3000, () => console.log("Listening on http://localhost:3000"));
+"""
+
+/** Batch numbers count on across sessions. */
+val COMPLETED = Regex("""Batch \d+ completed""")
+
+/** GoLand's own error, logged at every start, that names the plugin only because the panel asks whether JCEF works. */
+const val JCEF_STARTUP_ERROR = "com.intellij.ui.jcef.JBCefApp\$Holder <clinit> requests com.intellij.util.net.internal.ProxyMigrationService instance. Class initialization must not depend on services. Consider using instance of the service on-demand instead."
+
+class IntegrationTest {
+    init {
+        val build = Path(System.getProperty("ai.pair.build"))
+        di = DI {
+            extend(di)
+            bindSingleton<GlobalPaths>(overrides = true) { object : GlobalPaths(build) {} }
+        }
+    }
+
+    @Test
+    fun pairs() {
+        val root = createTempDirectory("ai-pair-project-").toFile()
+        val home = createTempDirectory("ai-pair-home-").toFile()
+        try {
+            val product = IdeProductProvider.GO.copy(getInstaller = { ExistingIdeInstaller(Path(System.getProperty("ai.pair.ide"))) })
+            val context = Starter.newContext("pairs", TestCase(product, LocalProjectInfo(root.toPath())))
+                .apply { PluginConfigurator(this).installPluginFromPath(Path(System.getProperty("path.to.build.plugin"))) }
+                .applyVMOptionsPatch { withEnv("AI_PAIR_HOME", home.path) }
+            val run = context.runIdeWithDriver().useDriverAndCloseIde {
+                // The plugin starts the host once the project is open.
+                until("the host's discovery file") { File(home, "windows").listFiles()?.isNotEmpty() == true }
+                val ide = Programmer(this, singleProject(), root)
+                // Commands run without asking, as in host.test.ts: the panel's Run button isn't the test's to press.
+                ide.command("setConfirmCommands", """{"confirm": false}""")
+                val launcher = utility(AgentSetup::class).writeLauncher().getPath()
+                Agent(launcher, root, home).use { agent -> pair(ide, agent, root) }
+            }
+            val errors = File(run.runContext.logsDir.toFile(), "errors").listFiles().orEmpty()
+                .map { File(it, "message.txt").readText().trim() }
+                .filter { it.lineSequence().first() != JCEF_STARTUP_ERROR }
+            assertEquals(emptyList<String>(), errors, "the IDE logged errors")
+        } finally {
+            root.deleteRecursively()
+            home.deleteRecursively()
+        }
+    }
+
+    private fun pair(ide: Programmer, agent: Agent, root: File) {
+        assertEquals(listOf("end", "listen", "read", "start", "step"), agent.tools().sorted())
+        fun call(name: String, args: String = "{}") = agent.call(name, args).get(60, TimeUnit.SECONDS)
+        fun step(actions: String = "[]") = agent.step(actions).get(60, TimeUnit.SECONDS)
+        // A new file is saved with the OS's line separator; the document always has \n.
+        fun disk(name: String) = File(root, name).readText().replace("\r\n", "\n")
+
+        // The demo, sped up. If our own edits were mistaken for the programmer's, it would stop early.
+        ide.command("setSpeed", """{"speed": 20}""")
+        val started = System.currentTimeMillis()
+        ide.command("playDemo")
+        until("the demo to start") { ide.host.getSessionActive() }
+        until("the demo to end", 120_000) { !ide.host.getSessionActive() }
+        println("demo played in ${System.currentTimeMillis() - started} ms")
+        assertEquals(EXPECTED_TODOS, ide.buffer("ai-pair-demo/src/todos.ts"))
+        assertEquals(EXPECTED_SERVER, ide.buffer("ai-pair-demo/src/server.ts"))
+        assertEquals(EXPECTED_SERVER, disk("ai-pair-demo/src/server.ts"), "saved after each batch")
+
+        // A change the programmer didn't make is reported as such, without interrupting: a tool writing to another file,
+        // which the IDE reloads. VS Code's second half, a save participant trimming the agent's save, can't happen here:
+        // the agent's saves are verbatim, and IntelliJ's actions on save run only on its own Save action.
+        ide.command("setSpeed", """{"speed": 1}""")
+        File(root, "other.txt").writeText("before\n")
+        call("start", """{"task": "other edits"}""")
+        // Opened, so the IDE holds a document for it, as an open file does.
+        call("read", """{"file": "other.txt"}""")
+        step("""[{"move": {"file": "other.txt", "line": 1, "to": "line_end"}}]""")
+        assertTrue(COMPLETED.containsMatchIn(step()))
+        step("""[{"move": {"file": "busy.txt", "line": 1, "to": "line_end"}}, {"type_fast": "${"x".repeat(200)}▌"}]""")
+        val queued = agent.step("""[{"type": "abc▌"}]""")
+        Thread.sleep(1500)
+        File(root, "other.txt").writeText("after\n")
+        ide.refresh("other.txt")
+        until("the reload") { ide.buffer("other.txt") == "after\n" }
+        val others = queued.get(60, TimeUnit.SECONDS) + "\n" + step()
+        assertTrue("other.txt was changed, not by the programmer but by a tool, a formatter, or on disk:\n@@ -1,1 +1,1 @@\n-before\n+after" in others, others)
+        assertTrue(Regex("""Batch \d+ completed[\s\S]*Batch \d+ completed""").containsMatchIn(others), others)
+        assertTrue("The programmer edited" !in others && "interrupted" !in others && "discarded" !in others, others)
+        assertEquals("x".repeat(200) + "abc", ide.buffer("busy.txt"))
+        call("end", """{"summary": "Bye."}""")
+        println("changes by others are reported as theirs")
+
+        // A programmer edit mid-typing interrupts, and the report shows exactly what was typed.
+        val alphabet = "abcdefghijklmnopqrstuvwxyz"
+        call("start", """{"task": "interrupt test"}""")
+        step("""[{"move": {"file": "scratch.txt", "line": 1, "to": "line_end"}}, {"type": "$alphabet▌"}]""")
+        val pending = agent.step("""[{"type": "!▌"}]""")
+        // Past the pauses around moving into a new file (~1 s), and into the typing.
+        Thread.sleep(1500)
+        ide.type("scratch.txt", 0, "X")
+        val report = pending.get(60, TimeUnit.SECONDS)
+        // What's left of the cut `type` comes back first, ready to resubmit.
+        val left = Regex("""Batch \d+ interrupted, in scratch\.txt:\n[\s\S]*?Not played:\n {2}\{"type":"([a-z]*)▌"}""").find(report)
+            ?.groupValues?.get(1) ?: error("Not an interrupted typing:\n$report")
+        val typed = alphabet.dropLast(left.length)
+        assertTrue(typed.isNotEmpty() && left.isNotEmpty(), "left: $left")
+        assertTrue(report.startsWith("The programmer edited scratch.txt:\n"), report)
+        assertTrue(Regex("""Batch \d+ discarded\.""").containsMatchIn(report), report)
+        assertEquals("X$typed", ide.buffer("scratch.txt"))
+        assertTrue("1  X$typed▌\n   (end of file, with no newline after the last line)" in report, report)
+        println("interrupted after typing \"$typed\"")
+
+        // Undo takes back the programmer's keystroke and the agent's cut typing as a step each. A keystroke of the
+        // agent's already on its way when the programmer typed lands after it, as a step of its own.
+        val undone = mutableListOf(ide.buffer("scratch.txt"))
+        while (undone.last().isNotEmpty() && undone.size < 5) {
+            ide.undo("scratch.txt")
+            undone += ide.buffer("scratch.txt")
+        }
+        assertEquals("", undone.last(), "undone: $undone")
+        assertTrue(undone.size <= 4, "undone: $undone")
+        assertTrue(undone.zipWithNext().any { (before, after) -> before == "X$after" }, "the programmer's X, as a step: $undone")
+        assertTrue(undone[undone.size - 2].length > 1, "the agent's typing, as a step: $undone")
+        call("end", """{"summary": "Bye."}""")
+        println("undone in steps: $undone")
+
+        // Saves keep what the agent typed, though IntelliJ strips trailing spaces on save by default: a strip would
+        // be an edit the agent didn't make, and the batch planned behind it would be discarded. Its own saves, and
+        // the IDE's autosave of its file during the session, here while it pauses to let its words be read.
+        call("start", """{"task": "verbatim saves"}""")
+        step("""[
+            {"move": {"file": "tool.txt", "line": 1, "to": "line_end"}},
+            {"type": "abc\nend   ▌"},
+            {"say": "That line ends in spaces, and the IDE saves it by itself while you read this, as it does when its window loses focus."}
+        ]""")
+        // The agent creates the file as it moves into it.
+        until("the agent's typing") { runCatching { ide.buffer("tool.txt") }.getOrNull() == "abc\nend   " }
+        ide.saveAll()
+        assertEquals("abc\nend   ", disk("tool.txt"), "autosaved verbatim")
+        val saved = step("""[{"type": "\n▌"}]""") + "\n" + step()
+        assertTrue(Regex("""Batch \d+ completed[\s\S]*Batch \d+ completed""").containsMatchIn(saved), saved)
+        assertTrue("edited" !in saved && "was changed" !in saved, saved)
+        assertEquals("abc\nend   \n", disk("tool.txt"))
+        call("end", """{"summary": "Bye."}""")
+        println("the agent's saves are verbatim")
+        ide.command("setSpeed", """{"speed": 20}""")
+
+        // Each editing action is one undo step (PROTOCOL.md): `type`, `type_fast`, and `delete`.
+        call("start", """{"task": "undo"}""")
+        step("""[
+            {"move": {"file": "undo.txt", "line": 1, "to": "line_end"}},
+            {"type": "one ▌"},
+            {"type_fast": "two ▌"},
+            {"type": "three\nfour▌"}
+        ]""")
+        assertTrue(COMPLETED.containsMatchIn(step()))
+        // In a batch of its own: the agent may only name a line it has seen in a report.
+        step("""[{"select": {"line": 1, "text": "two "}}, {"delete": true}]""")
+        val played = step()
+        assertTrue(COMPLETED.containsMatchIn(played), played)
+        val steps = mutableListOf(ide.buffer("undo.txt"))
+        repeat(4) {
+            ide.undo("undo.txt")
+            steps += ide.buffer("undo.txt")
+        }
+        assertEquals(listOf("one three\nfour", "one two three\nfour", "one two ", "one ", ""), steps)
+        assertTrue("The programmer edited undo.txt:" in step(), "undoing is the programmer's edit")
+        call("end", """{"summary": "Bye."}""")
+        println("one undo step per action")
+
+        // The programmer takes the turn, edits, and hands it back; the agent's next move still lands where it meant.
+        call("start", """{"task": "turns"}""")
+        step("""[
+            {"move": {"file": "hello.go", "line": 1, "to": "line_end"}},
+            {"type_fast": "package main\n\n▌"},
+            {"type": "func hello() string {\n▌\n}\n"},
+            {"type": "\treturn \"hello from the agent\"▌"}
+        ]""")
+        assertTrue(COMPLETED.containsMatchIn(step()))
+        val listening = agent.call("listen")
+        ide.command("toggleTurn")
+        assertTrue("The programmer took the turn." in listening.get(60, TimeUnit.SECONDS))
+        val end = ide.buffer("hello.go").length
+        ide.type("hello.go", end, "// mine")
+        ide.command("toggleTurn")
+        var heard = ""
+        while ("handed the turn back" !in heard) heard += call("listen")
+        assertTrue("The programmer edited hello.go:" in heard, heard)
+        step("""[{"move": {"at": "the agent▌\""}}, {"type": " and you▌"}]""")
+        assertTrue(COMPLETED.containsMatchIn(step()))
+        assertEquals(
+            "package main\n\nfunc hello() string {\n\treturn \"hello from the agent and you\"\n}\n// mine",
+            ide.buffer("hello.go"),
+        )
+        call("end", """{"summary": "Bye."}""")
+        println("turns taken and handed back")
+
+        // A command in the agent's terminal tab, its output captured.
+        call("start", """{"task": "run"}""")
+        // Quoted: PowerShell's echo prints each argument on a line of its own.
+        step("""[{"run": "echo 'hello from run'"}]""")
+        val ran = step()
+        assertTrue(Regex("""Ran `echo 'hello from run'` in \w+: exited with 0\. Output:\n```\n[^`]*hello from run\n```""").containsMatchIn(ran), ran)
+        println("run captured")
+
+        // A command that leaves the shell in another directory doesn't cost a tab: the next one runs in the same tab,
+        // moved back to the session's directory. `cd` and `cat` are PowerShell's aliases too.
+        File(root, "sub").mkdirs()
+        File(root, "marker.txt").writeText("in the root\n")
+        step("""[{"run": "cd sub; echo 'in sub'"}]""")
+        val moved = step()
+        assertTrue(Regex("""exited with 0\. Output:\n```\n[^`]*in sub\n```""").containsMatchIn(moved), moved)
+        step("""[{"run": "cat marker.txt"}]""")
+        val back = step()
+        assertTrue(Regex("""Ran `cat marker.txt` in \w+: exited with 0\. Output:\n```\n[^`]*in the root\n```""").containsMatchIn(back), back)
+        assertEquals(1, ide.terminalTabs().count { it?.startsWith("AI Pair") == true }, "AI Pair tabs: ${ide.terminalTabs()}")
+        call("end", """{"summary": "Bye."}""")
+        println("one tab for every run")
+    }
+}

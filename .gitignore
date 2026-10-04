@@ -6,3 +6,11 @@ dist-test/
 packages/vscode/LICENSE
 # Built by `npm run package`.
 *.vsix
+# JetBrains
+.junie
+.idea
+# Gradle, for the IntelliJ plugin.
+.gradle/
+.kotlin/
+.intellijPlatform/
+packages/intellij/build/

@@ -3,7 +3,9 @@
 How the extension looks and behaves for the programmer. The contract with the
 agent is in [PROTOCOL.md](PROTOCOL.md), and the components and how they
 connect are in [ARCHITECTURE.md](ARCHITECTURE.md). This document covers what
-the programmer experiences.
+the programmer experiences. It describes VS Code; the JetBrains plugin follows
+the same design, and where it differs is in
+[In JetBrains IDEs](#in-jetbrains-ides) at the end.
 
 Status: **draft**. Numbers marked *tunable* are initial guesses to be adjusted
 by feel.
@@ -217,6 +219,31 @@ native tools, or anything else) are marked:
 The mark clears when the programmer opens the file or the diff. The extension
 can't tell the agent's native edits from other tools (git, formatters), so the
 wording stays neutral.
+
+## In JetBrains IDEs
+
+The same session, timing and panel, with these differences:
+
+- **The cursor** is drawn by the plugin over the editor's text, with the same
+  states and pulse. Its colors are the plugin's own for now, not yet colors
+  that themes and users can override, and they don't follow VS Code's
+  latest tuning.
+- **The panel** is the same page, in the *AI Pair* tool window, on the right
+  by default. It takes its colors and fonts from the IDE's theme and editor
+  color scheme, and restyles in place when either changes, keeping a
+  half-typed reply.
+- **The settings** are on *Settings → Tools → AI Pair*: speed, agent name,
+  confirming commands, and timing as JSON, for all projects, and a project's
+  own speed, agent name and timing.
+- **The commands** are in *Tools → AI Pair*, and *Ask the Agent About the
+  Selection* is in the editor's right-click menu.
+- **Saves are verbatim.** IntelliJ strips trailing spaces on save by default,
+  and VS Code doesn't. Stripping a line the agent is about to type on would
+  count as an edit the agent didn't make, so the agent's own saves, and any
+  save of the file it's typing in during a session, keep the text as typed.
+- **`run`** plays in an *AI Pair* tab of the Terminal tool window. When the
+  terminal's shell is cmd.exe, which has no shell integration to capture
+  output, that tab runs PowerShell instead.
 
 ## Open questions
 

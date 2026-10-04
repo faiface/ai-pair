@@ -1,0 +1,35 @@
+<idea-plugin>
+    <id>ai.pair</id>
+    <name>AI Pair Programmer</name>
+    <vendor>ai-pair</vendor>
+    <description>Pair program with an AI agent: a second cursor that types at a human pace and narrates what it's doing.</description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>org.jetbrains.plugins.terminal</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <postStartupActivity implementation="ai.pair.host.PairStartup"/>
+        <toolWindow id="AI Pair" anchor="right" icon="AllIcons.Toolwindows.ToolWindowMessages"
+                    factoryClass="ai.pair.panel.PanelToolWindowFactory"/>
+        <notificationGroup id="AI Pair" displayType="BALLOON"/>
+        <trailingSpacesOptionsProvider implementation="ai.pair.editor.VerbatimSave" order="first"/>
+        <projectConfigurable parentId="tools" id="ai.pair.settings" displayName="AI Pair"
+                             instance="ai.pair.settings.PairConfigurable"/>
+    </extensions>
+
+    <actions>
+        <group id="ai.pair.Actions" text="AI Pair" popup="true">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <action id="ai.pair.SetUpAgent" class="ai.pair.actions.SetUpAgentAction" text="Set Up Agent"/>
+            <action id="ai.pair.PlayDemo" class="ai.pair.actions.PlayDemoAction" text="Play Demo Session"/>
+            <action id="ai.pair.TogglePause" class="ai.pair.actions.TogglePauseAction" text="Pause / Resume"/>
+            <action id="ai.pair.Interrupt" class="ai.pair.actions.InterruptAction" text="Interrupt"/>
+            <action id="ai.pair.ToggleTurn" class="ai.pair.actions.ToggleTurnAction" text="Take / Hand Back the Turn"/>
+            <action id="ai.pair.EndSession" class="ai.pair.actions.EndSessionAction" text="End Session"/>
+            <action id="ai.pair.FocusReply" class="ai.pair.actions.FocusReplyAction" text="Reply to the Agent"/>
+        </group>
+        <action id="ai.pair.AskAboutSelection" class="ai.pair.actions.FocusReplyAction" text="Ask the Agent About the Selection">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </action>
+    </actions>
+</idea-plugin>
