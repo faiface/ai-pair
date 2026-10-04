@@ -81,7 +81,7 @@ session that adds a small API to an Express app, which it creates in
 ## How it works under the hood
 
 ```
-agent (Claude Code, …) ──stdio MCP──▶ pair-mcp ──local WebSocket──▶ VS Code extension
+agent (Claude Code, …) ── stdio MCP ──▶ pair-mcp ── local WebSocket ──▶ VS Code extension
 ```
 
 The agent submits small batches of actions: say, move, select, type, delete,
