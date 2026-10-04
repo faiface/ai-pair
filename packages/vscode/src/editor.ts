@@ -36,6 +36,12 @@ const SCROLL_QUIET_MS = 50
 /** The longest we wait for our own scroll to finish. */
 const SCROLL_MAX_MS = 500
 
+/** How long follow mode's scroll glides, easing out, however far it goes. */
+const GLIDE_MS = 500
+
+/** A glide's frame. */
+const FRAME_MS = 16
+
 /** A shared selection is cut off here; the agent can `read` the rest. */
 const MAX_EXCERPT = 8000
 
@@ -426,6 +432,7 @@ export class VsCodeEditor implements EditorPort, vscode.Disposable {
    */
   private async scroll(editor: vscode.TextEditor, line: number, height?: number): Promise<void> {
     this.scrolling = true
+    const from = editor.visibleRanges[0]!.start.line
     try {
       if (height === undefined) {
         await this.revealLine(editor, line, vscode.TextEditorRevealType.InCenter)
@@ -438,17 +445,45 @@ export class VsCodeEditor implements EditorPort, vscode.Disposable {
         if (height === undefined || target?.file !== editor.document.uri.fsPath || !FOLLOWING.has(this.state)) return
         line = editor.document.positionAt(target.offset).line
       }
-      // A reveal at the top leaves room above for sticky scroll or `editor.cursorSurroundingLines`,
-      // up to half the viewport, so reveal that much lower for the landing line to end up at the top.
-      const options = vscode.workspace.getConfiguration("editor", editor.document)
-      const sticky = options.get("stickyScroll.enabled", true) ? options.get("stickyScroll.maxLineCount", 5) : 0
-      const room = Math.floor(Math.min(height / 2, Math.max(options.get("cursorSurroundingLines", 0), sticky)))
-      await this.revealLine(editor, this.landing(editor, line, height) + room, vscode.TextEditorRevealType.AtTop)
+      await this.glide(editor, from, this.landing(editor, line, height), height)
     } finally {
       this.scrolling = false
     }
     const target = this.target()
     if (target?.file !== editor.document.uri.fsPath || editor.document.positionAt(target.offset).line !== line) this.follow()
+  }
+
+  /**
+   * Scrolls the view's top line from `from` to `to`, easing out, a line at a time: the API scrolls by
+   * lines. With `editor.smoothScrolling`, VS Code animates the scroll itself.
+   */
+  private async glide(editor: vscode.TextEditor, from: number, to: number, height: number): Promise<void> {
+    const smooth = vscode.workspace.getConfiguration("editor", editor.document).get("smoothScrolling", false)
+    if (smooth) return this.revealTop(editor, to, height)
+    // Back from the middle, if measuring went there, before anyone sees it.
+    if (editor.visibleRanges[0]?.start.line !== from) await this.revealTop(editor, from, height)
+    const started = Date.now()
+    let top = from
+    while (top !== to) {
+      await new Promise((resolve) => setTimeout(resolve, FRAME_MS))
+      if (!FOLLOWING.has(this.state)) return
+      const t = Math.min(1, (Date.now() - started) / GLIDE_MS)
+      const next = Math.round(from + (to - from) * (1 - (1 - t) ** 3))
+      if (next === top) continue
+      top = next
+      await this.revealTop(editor, top, height)
+    }
+  }
+
+  /**
+   * Scrolls `top` to the top of the view. A reveal at the top leaves room above for sticky scroll or
+   * `editor.cursorSurroundingLines`, up to half the viewport, so it reveals that much lower.
+   */
+  private revealTop(editor: vscode.TextEditor, top: number, height: number): Promise<void> {
+    const options = vscode.workspace.getConfiguration("editor", editor.document)
+    const sticky = options.get("stickyScroll.enabled", true) ? options.get("stickyScroll.maxLineCount", 5) : 0
+    const room = Math.floor(Math.min(height / 2, Math.max(options.get("cursorSurroundingLines", 0), sticky)))
+    return this.revealLine(editor, top + room, vscode.TextEditorRevealType.AtTop)
   }
 
   /** The top line of the view that has `line` a third of the way down, as far as the editor can scroll. */

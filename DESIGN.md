@@ -199,6 +199,10 @@ During the agent's turn:
   panel's current message. So typing downward scrolls every 40% of a
   viewport or so, not on every keystroke, and every jump lands in the same
   place. At the top of a file, it sits as low as the file lets it.
+- The view **glides** there, easing out over half a second, however far it
+  goes, so the programmer sees which way the code went. It moves a line at a
+  time, since that's how the extension API scrolls. With
+  `editor.smoothScrolling` on, VS Code animates it instead.
 - The viewport's height comes from the lines VS Code shows. Near the end of a
   file those stop at its last line, short of the viewport's bottom, and a
   zoom or a resize there changes nothing VS Code reports. So a scroll there
