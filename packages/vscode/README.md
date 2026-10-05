@@ -1,12 +1,44 @@
-# AI Pair Programmer
+## For those of us who want, need, or love to stay close to the code
 
-Pair program with an AI agent. The agent gets its own cursor in your editor. It
-types at a human pace and narrates what it's doing in the **Pair** panel, and
-you can interrupt it, reply, or take over at any moment.
+> A **mirror neuron** is a neuron that fires both when an animal acts and when
+> the animal observes the same action performed by another.
+>
+> — [Wikipedia](https://en.wikipedia.org/wiki/Mirror_neuron)
 
-It works with your existing coding agent through MCP: setup is built in for
-Claude Code, Codex, OpenCode, Gemini CLI, Cursor and GitHub Copilot, and any
-other agent with MCP can be connected by hand. Claude Code is the tested one.
+**Be there for every keystroke**
+
+![The agent explains the update method in the Pair panel, then types it in the editor](https://raw.githubusercontent.com/faiface/ai-pair/main/media/every-keystroke.gif)
+
+Some of us, at least some of the time, want to understand our code at a deep
+level. For that, handing a task to an agent and reviewing the diff that comes
+back can be exhausting. With *AI Pair*, you're there for every keystroke
+instead, and you end up knowing the code almost as if you'd typed it yourself.
+
+It's pair programming where your coding agent has the keyboard. It types in
+your editor slowly enough to follow and explains what it's doing. Interrupt it
+whenever you like, or take over and let it watch you for a change.
+
+**Interrupt and steer**
+
+![The programmer asks the agent to fix its imports, and it adds them at the top of the file](https://raw.githubusercontent.com/faiface/ai-pair/main/media/interrupt-and-steer.gif)
+
+**Watch it change its mind in real time**
+
+![The agent writes a comment, reconsiders, deletes it, and documents the type differently](https://raw.githubusercontent.com/faiface/ai-pair/main/media/change-its-mind.gif)
+
+It's also a good way to learn a new technology, or to have the agent walk you
+through code you don't know yet.
+
+**Ask it to explain code line by line**
+
+![The agent walks through a function line by line, highlighting each line and explaining it in the Pair panel](https://raw.githubusercontent.com/faiface/ai-pair/main/media/explain-line-by-line.gif)
+
+It works in VS Code, with the coding agent you already use. Setup is built in
+for Claude Code, Codex, OpenCode, Gemini CLI, Cursor and GitHub Copilot, and
+any agent that supports MCP can be connected by hand.
+
+**Note:** It works best with strong models; weaker ones tend to struggle with
+this way of working.
 
 ## Set up
 
