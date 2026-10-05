@@ -66,7 +66,7 @@ async function insertAsProgrammer(uri: vscode.Uri, position: vscode.Position, te
 }
 
 export async function run(): Promise<void> {
-  const ext = vscode.extensions.getExtension("ai-pair.ai-pair")
+  const ext = vscode.extensions.getExtension("michalstrba.ai-pair")
   assert.ok(ext, "extension not found")
   const api = (await ext.activate()) as Api
   const root = vscode.workspace.workspaceFolders![0]!.uri.fsPath

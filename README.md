@@ -100,19 +100,23 @@ The design is written up in:
 
 ## Install
 
-You need **VS Code 1.105 or newer** and **Node.js 20 or newer**. Build the
-extension from source and install it:
+You need **VS Code 1.105 or newer**. Install
+[**AI Pair**](https://marketplace.visualstudio.com/items?itemName=michalstrba.ai-pair)
+from the Extensions view, or:
+
+```sh
+code --install-extension michalstrba.ai-pair
+```
+
+To build it from source instead, you also need **Node.js 20 or newer**:
 
 ```sh
 git clone https://github.com/faiface/ai-pair.git
 cd ai-pair
 npm install
 npm run package
-code --install-extension ai-pair-0.1.0.vsix
+code --install-extension ai-pair-*.vsix
 ```
-
-Or, instead of the last line, in VS Code: Extensions view → `…` menu →
-*Install from VSIX…*
 
 ## Connect your agent
 
