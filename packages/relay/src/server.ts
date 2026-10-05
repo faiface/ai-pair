@@ -8,6 +8,10 @@ import { RelayError, type EditorLink } from "./link"
 import { renderFile, renderReport } from "./render"
 import { TOOLS } from "./tools"
 
+/** The extension's version, which the build defines; unbuilt, as in tests, there's none. */
+declare const AI_PAIR_VERSION: string | undefined
+const VERSION = typeof AI_PAIR_VERSION === "string" ? AI_PAIR_VERSION : "dev"
+
 /** Always loaded by the harness, so kept short; the full guide comes with `start`. */
 export const INSTRUCTIONS = `Live pair programming in the programmer's editor (VS Code with the AI Pair extension). When the programmer asks to pair, call \`start\` with your working directory: its result includes the pairing guide, which you follow for the whole session. During a session, everything you do through \`step\` appears in their editor at a human pace, with your narration, and they can interrupt or take over at any moment. Never end your turn during a session; call \`listen\` instead.`
 
@@ -31,7 +35,7 @@ const ROOTS_MS = 2000
  * roots, and `cwd`. Some harnesses start MCP servers in `/` or in their own install folder.
  */
 export function createServer(link: EditorLink, guide: string, cwd: string): McpServer {
-  const server = new McpServer({ name: "ai-pair", version: "0.0.1" }, { instructions: INSTRUCTIONS })
+  const server = new McpServer({ name: "ai-pair", version: VERSION }, { instructions: INSTRUCTIONS })
 
   const roots = async (): Promise<string[]> => {
     if (!server.server.getClientCapabilities()?.roots) return []

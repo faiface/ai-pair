@@ -23,4 +23,12 @@ const common = {
 }
 
 await esbuild.build({ ...common, entryPoints: ["src/extension.ts"], external: ["vscode"], outfile: "dist/extension.js" })
-await esbuild.build({ ...common, entryPoints: ["../relay/src/main.ts"], loader: { ".md": "text" }, outfile: "dist/relay.js" })
+// The relay tells agents the extension's version.
+const { version } = JSON.parse(fs.readFileSync("package.json", "utf8"))
+await esbuild.build({
+  ...common,
+  entryPoints: ["../relay/src/main.ts"],
+  loader: { ".md": "text" },
+  define: { AI_PAIR_VERSION: JSON.stringify(version) },
+  outfile: "dist/relay.js",
+})

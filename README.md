@@ -189,6 +189,22 @@ To run your working copy, open the repository in VS Code and press F5, or:
 code --extensionDevelopmentPath="$PWD/packages/vscode" <a project folder>
 ```
 
+### Releasing
+
+Add a section for the new version to
+[`packages/vscode/CHANGELOG.md`](packages/vscode/CHANGELOG.md), then, on an
+up-to-date `main`:
+
+```sh
+npm run release -- patch   # or minor, major, or an exact version
+```
+
+It runs every test, bumps the version, builds the `.vsix` once and publishes
+that file to the Marketplace, then commits, tags and pushes the release and
+makes a GitHub release with the `.vsix` attached. It asks before publishing,
+since a version can't be published twice. It needs `vsce login michalstrba` and
+`gh auth login` done once.
+
 ## License
 
 [MIT](LICENSE)
