@@ -221,6 +221,20 @@ export function panelHtml(cspSource: string): string {
   a.ref { font-size: 11.5px; }
   #now-ref a.ref { color: var(--muted); }
 
+  /*
+   * Tooltips are the panel's own, in the theme's hover colors, like VS Code's: native ones show
+   * unreliably in a webview, and only on hover.
+   */
+  #tip {
+    position: fixed; z-index: 20; max-width: min(280px, calc(100vw - 12px)); box-sizing: border-box;
+    padding: 4px 8px; border-radius: 4px; font-size: 12px; line-height: 1.4; pointer-events: none;
+    background: var(--vscode-editorHoverWidget-background, var(--surface));
+    color: var(--vscode-editorHoverWidget-foreground, var(--fg));
+    border: 1px solid var(--vscode-editorHoverWidget-border, var(--border));
+    box-shadow: 0 2px 8px var(--vscode-widget-shadow, transparent);
+  }
+  #tip[hidden] { display: none; }
+
   @media (prefers-reduced-motion: reduce) {
     .dot.read, .arrive { animation: none; }
   }
@@ -233,14 +247,14 @@ export function panelHtml(cspSource: string): string {
       <div id="head">
         <div id="status"><span id="dot" class="dot off"></span><span id="status-text">No session</span></div>
         <div id="controls">
-          <button id="pause" class="quiet" aria-label="Pause" title="Pause (Space)" aria-keyshortcuts="Space">${ICONS.pause}${ICONS.resume}</button>
-          <button id="interrupt" class="quiet" aria-label="Interrupt" title="Interrupt">${ICONS.stop}</button>
-          <button id="turn" class="quiet" aria-label="My turn" title="Take the turn: you drive, the agent navigates">${ICONS.swap}<span id="turn-label">My turn</span></button>
+          <button id="pause" class="quiet" aria-label="Pause" data-tip="Pause (Space)" aria-keyshortcuts="Space">${ICONS.pause}${ICONS.resume}</button>
+          <button id="interrupt" class="quiet" aria-label="Interrupt" data-tip="Interrupt">${ICONS.stop}</button>
+          <button id="turn" class="quiet" aria-label="My turn" data-tip="Take the turn: you drive, the agent navigates">${ICONS.swap}<span id="turn-label">My turn</span></button>
           <div id="speed-wrap">
-            <button id="speed" class="quiet" aria-haspopup="menu" aria-expanded="false" title="Playback speed">1.0×</button>
+            <button id="speed" class="quiet" aria-haspopup="menu" aria-expanded="false" data-tip="Playback speed">1.0×</button>
             <div id="speed-menu" role="menu" aria-label="Playback speed" hidden>${speeds}</div>
           </div>
-          <button id="end" class="quiet" aria-label="End the session" title="End the session">${ICONS.exit}</button>
+          <button id="end" class="quiet" aria-label="End the session" data-tip="End the session">${ICONS.exit}</button>
         </div>
       </div>
       <div id="now">
@@ -251,7 +265,7 @@ export function panelHtml(cspSource: string): string {
           <div id="run-cmd"></div>
           <div id="run-actions">
             <button id="run-go" class="primary">${ICONS.play}<span>Run</span></button>
-            <button id="run-always" class="soft" title="Run it, and run exactly this command without asking until the session ends">Allow for session</button>
+            <button id="run-always" class="soft" data-tip="Run it, and run exactly this command without asking until the session ends">Allow for session</button>
             <button id="run-skip" class="quiet">Skip</button>
           </div>
         </div>
@@ -263,15 +277,16 @@ export function panelHtml(cspSource: string): string {
       </div>
     </div>
     <div id="composer">
-      <div id="attach"><span>With selection</span><a id="attach-ref"></a><button id="attach-x" class="quiet" aria-label="Don't send the selection" title="Don't send the selection">×</button></div>
+      <div id="attach"><span>With selection</span><a id="attach-ref"></a><button id="attach-x" class="quiet" aria-label="Don't send the selection" data-tip="Don't send the selection">×</button></div>
       <div id="compose-row">
         <textarea id="reply" rows="1" aria-label="Reply to the agent" placeholder="Reply to the agent…"></textarea>
-        <button id="send" class="quiet" aria-label="Send" title="Send (Enter)">${ICONS.send}</button>
+        <button id="send" class="quiet" aria-label="Send" data-tip="Send (Enter)">${ICONS.send}</button>
       </div>
     </div>
   </section>
   <section id="history" aria-label="Earlier, newest first"></section>
 </div>
+<div id="tip" role="tooltip" hidden></div>
 <script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
   const $ = (id) => document.getElementById(id);
@@ -282,7 +297,7 @@ export function panelHtml(cspSource: string): string {
     idleTitle: $("idle-title"), idleSummary: $("idle-summary"), idleText: $("idle-text"),
     reply: $("reply"), send: $("send"), attach: $("attach"), attachRef: $("attach-ref"), attachX: $("attach-x"),
     run: $("run"), runLabel: $("run-label"), runCmd: $("run-cmd"), runGo: $("run-go"), runAlways: $("run-always"), runSkip: $("run-skip"),
-    history: $("history"),
+    history: $("history"), tip: $("tip"),
   };
   let active = false, turn = "agent", paused = false, replaying = false;
   let state = null;     // the agent's state, as the extension last reported it
@@ -337,7 +352,7 @@ export function panelHtml(cspSource: string): string {
     const cmd = document.createElement("span");
     cmd.className = "cmd";
     cmd.textContent = command;
-    cmd.title = command;
+    cmd.dataset.tip = command;
     const outcome = document.createElement("span");
     el.append(cmd, outcome);
     setOutcome(el, phase, exitCode);
@@ -431,11 +446,12 @@ export function panelHtml(cspSource: string): string {
     document.body.classList.toggle("user-turn", turn === "user");
     ui.pause.classList.toggle("on", paused);
     ui.pause.setAttribute("aria-label", paused ? "Resume" : "Pause");
-    ui.pause.title = paused ? "Resume (Space)" : "Pause (Space)";
+    setTip(ui.pause, paused ? "Resume (Space)" : "Pause (Space)");
     ui.turnLabel.textContent = turn === "user" ? "Hand back" : "My turn";
     ui.turn.setAttribute("aria-label", ui.turnLabel.textContent);
-    ui.turn.title = turn === "user" ? "Hand the turn back to the agent, with your reply if you typed one" : "Take the turn: you drive, the agent navigates";
+    setTip(ui.turn, turn === "user" ? "Hand the turn back to the agent, with your reply if you typed one" : "Take the turn: you drive, the agent navigates");
     syncStatus();
+    syncTip();
   }
 
   function setActive(on) {
@@ -449,6 +465,7 @@ export function panelHtml(cspSource: string): string {
     }
     syncStatus();
     syncAttach();
+    syncTip();
   }
 
   function handle(e) {
@@ -607,6 +624,69 @@ export function panelHtml(cspSource: string): string {
   }
   document.addEventListener("click", (e) => { if (!ui.speedMenu.hidden && !ui.speedMenu.contains(e.target)) closeSpeedMenu(); });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !ui.speedMenu.hidden) { closeSpeedMenu(); ui.speed.focus(); } });
+
+  // Tooltips: an element's data-tip shows under it after a moment's hover, or at once while one is
+  // showing or just was, the way VS Code's own hovers do; and on keyboard focus. A click hides it.
+  const TIP_DELAY_MS = 500, TIP_WARM_MS = 300, TIP_GAP = 4, TIP_MARGIN = 6;
+  let tipTarget = null, tipTimer = 0, tipWarmUntil = 0;
+
+  function setTip(el, text) {
+    el.dataset.tip = text;
+    if (el === tipTarget) { ui.tip.textContent = text; placeTip(); }
+  }
+
+  function showTip(el) {
+    clearTimeout(tipTimer);
+    if (el === ui.speed && !ui.speedMenu.hidden) return;
+    tipTarget = el;
+    ui.tip.textContent = el.dataset.tip;
+    ui.tip.hidden = false;
+    el.setAttribute("aria-describedby", "tip");
+    placeTip();
+  }
+
+  // Under the element, centered on it, inside the panel; above it if there's no room below.
+  function placeTip() {
+    const r = tipTarget.getBoundingClientRect(), w = ui.tip.offsetWidth, h = ui.tip.offsetHeight;
+    const left = Math.max(TIP_MARGIN, Math.min(r.left + r.width / 2 - w / 2, innerWidth - w - TIP_MARGIN));
+    const top = r.bottom + TIP_GAP + h <= innerHeight - TIP_MARGIN ? r.bottom + TIP_GAP : r.top - TIP_GAP - h;
+    ui.tip.style.left = left + "px";
+    ui.tip.style.top = Math.max(TIP_MARGIN, top) + "px";
+  }
+
+  function hideTip() {
+    clearTimeout(tipTimer);
+    if (!tipTarget) return;
+    tipTarget.removeAttribute("aria-describedby");
+    tipTarget = null;
+    ui.tip.hidden = true;
+    tipWarmUntil = performance.now() + TIP_WARM_MS;
+  }
+
+  function hoverTip(el) {
+    if (el === tipTarget) return;
+    const warm = tipTarget !== null || performance.now() < tipWarmUntil;
+    hideTip();
+    if (!el) return;
+    if (warm) showTip(el);
+    else tipTimer = setTimeout(() => showTip(el), TIP_DELAY_MS);
+  }
+
+  // The element went away or moved, when the panel changed under it.
+  function syncTip() {
+    if (!tipTarget) return;
+    if (tipTarget.getClientRects().length === 0) hideTip();
+    else placeTip();
+  }
+
+  document.addEventListener("pointerover", (e) => hoverTip(e.target.closest("[data-tip]")));
+  document.documentElement.addEventListener("pointerleave", () => hoverTip(null));
+  document.addEventListener("pointerdown", hideTip, true);
+  document.addEventListener("focusin", (e) => { if (e.target.matches("[data-tip]:focus-visible")) showTip(e.target); });
+  document.addEventListener("focusout", (e) => { if (e.target === tipTarget) hideTip(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideTip(); }, true);
+  document.addEventListener("scroll", hideTip, true);
+  window.addEventListener("blur", hideTip);
 
   // Space pauses and resumes, anywhere in the panel but the reply box. It doesn't press the focused
   // button, which after a click could be End; Enter still does.

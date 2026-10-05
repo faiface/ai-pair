@@ -93,7 +93,9 @@ side bar's (the band's hairline marks it either way), and some themes set
 full strength and their contrast border in place of hairlines. The controls
 are the theme's too: icon buttons hover like its toolbar icons, and Run and
 Allow for session are its primary and secondary buttons, with their hover
-colors and borders. The agent's colors are theme colors too (see Agent
+colors and borders. Their tooltips are the panel's own, in the theme's hover
+colors, shown after a moment's hover or on keyboard focus, since native
+tooltips show unreliably in a webview. The agent's colors are theme colors too (see Agent
 cursor).
 
 Behavior:

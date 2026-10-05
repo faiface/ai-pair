@@ -15,3 +15,9 @@ it("offers the speeds with one decimal, so they line up", () => {
   const html = panelHtml("vscode-resource:")
   for (const s of SPEEDS) expect(html).toContain(`data-speed="${s}">${s.toFixed(1)}×</button>`)
 })
+
+it("gives controls the panel's own tooltips, since native ones show unreliably in a webview", () => {
+  const html = panelHtml("vscode-resource:")
+  expect(html).not.toMatch(/\stitle=|\.title = /)
+  expect(html).toContain('data-tip="Interrupt"')
+})
