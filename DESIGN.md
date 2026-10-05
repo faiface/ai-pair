@@ -57,8 +57,9 @@ Layout, top to bottom:
    - **The current message**, in large text (≈1.3× the editor font,
      *tunable*), high contrast. Its **top edge is fixed**, right under the
      header; its height grows downward with the message length. A new message
-     fades in, in sync with the cursor's read state. The code the agent
-     pointed at before it is linked under it.
+     fades in, in sync with the cursor's read state. It stays at full
+     strength while paused, since a pause is often for reading it. The code
+     the agent pointed at before it is linked under it.
    - **The reading pause** fills a thin ring around the status dot, so the
      pause feels intentional, while the dot takes the read color. The ring's
      rest is the same color, faded. Otherwise

@@ -143,14 +143,9 @@ export function panelHtml(cspSource: string): string {
 
   #now { display: none; margin-top: 8px; }
   body.active #now { display: block; }
-  #now-text {
-    font-size: calc(var(--vscode-editor-font-size, 13px) * 1.3); line-height: 1.5; overflow-wrap: anywhere;
-    transition: opacity 0.25s;
-  }
+  #now-text { font-size: calc(var(--vscode-editor-font-size, 13px) * 1.3); line-height: 1.5; overflow-wrap: anywhere; }
   #now-text.empty { font-size: inherit; color: var(--muted); }
   #now-text code { font-size: 0.85em; padding: 1px 3px; border-radius: 3px; }
-  /* Paused: the message steps back. */
-  body.paused #now-text { opacity: 0.55; }
   /* Something new in the band fades in. */
   .arrive { animation: arrive 0.7s ease-out; }
   @keyframes arrive { from { opacity: 0.2; } }
