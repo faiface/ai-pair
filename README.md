@@ -1,5 +1,7 @@
 # <img src="packages/vscode/media/icon.png" alt="" width="40" align="top"> AI Pair Programmer
 
+**[Install it from the VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=michalstrba.ai-pair)**
+
 ## For those of us who want, need, or love to stay close to the code
 
 > A **mirror neuron** is a neuron that fires both when an animal acts and when
@@ -100,9 +102,9 @@ The design is written up in:
 
 ## Install
 
-You need **VS Code 1.105 or newer**. Install
-[**AI Pair**](https://marketplace.visualstudio.com/items?itemName=michalstrba.ai-pair)
-from the Extensions view, or:
+You need **VS Code 1.105 or newer**. Install **AI Pair** from the
+[VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=michalstrba.ai-pair): in the
+Extensions view, search for `@id:michalstrba.ai-pair`, or run:
 
 ```sh
 code --install-extension michalstrba.ai-pair
