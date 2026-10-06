@@ -1016,6 +1016,27 @@ describe("cancellation", () => {
       [2, "completed"],
     ])
   })
+
+  it("cancels a step whose abort arrives during its rehearsal", async () => {
+    const { editor, controller } = setup({ "a.ts": "" })
+    await controller.start()
+    await controller.step([{ move: { file: "a.ts", line: 1, to: "line_end" } }, { type: "ab\u{258c}" }])
+    const abort = new AbortController()
+    const second = track(controller.step([{ type: "c\u{258c}" }], abort.signal))
+    await Promise.resolve()
+    abort.abort()
+    await advance(10)
+    expect(second.error).toMatchObject({ code: "cancelled" })
+
+    // Canceled during the rehearsal, not before it: the batch was queued, and still plays.
+    await advance(1000)
+    expect(editor.text("a.ts")).toBe("abc")
+    const report = await until(controller.step([]))
+    expect(report.batches.map((b) => [b.id, b.status])).toEqual([
+      [1, "completed"],
+      [2, "completed"],
+    ])
+  })
 })
 
 describe("sessions", () => {

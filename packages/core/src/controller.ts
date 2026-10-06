@@ -487,6 +487,8 @@ export class Controller {
    * report, so nothing is lost: a submitted batch stays queued and is reported on the next call.
    */
   private block(kind: Call["kind"], opts: { batch?: Batch; summary?: string }, signal?: AbortSignal): Promise<Report> {
+    // An abort that fired while the batch was rehearsed won't fire again.
+    if (signal?.aborted) return Promise.reject(cancelled())
     return new Promise((resolve, reject) => {
       const call: Call = {
         kind,
