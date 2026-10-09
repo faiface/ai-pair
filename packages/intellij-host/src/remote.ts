@@ -117,6 +117,10 @@ export class RemoteEditor implements EditorPort {
     this.link.notify("reveal", {})
   }
 
+  follow(): void {
+    this.link.notify("follow", {})
+  }
+
   runCommand(command: string, options: RunOptions): Promise<CommandOutcome> {
     return this.link.call("runCommand", { command, cwd: options.cwd, waitMs: options.waitMs }, options.signal)
   }

@@ -115,6 +115,7 @@ class PairEditor(private val project: Project, private val host: PairHost) {
                     show(it.file)
                     follow(it, force = true)
                 }
+                "follow" -> target()?.takeIf { state in FOLLOWING }?.let { follow(it) }
                 "post" -> args["event"].asJsonObject.let { if (it["type"].asString == "session") sessionActive = it["active"].asBoolean }
             }
         }, project.disposed)

@@ -58,6 +58,7 @@ export type Notices = {
   renderCursor: { cursor: CursorView | null; state: AgentState; focus: Focus }
   renderPoint: { point: { file: string; start: number; end: number } | null }
   reveal: {}
+  follow: {}
   post: { event: PanelEvent }
 }
 
