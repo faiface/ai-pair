@@ -1,9 +1,9 @@
 package ai.pair.setup
 
+import ai.pair.host.NodeLocator
 import com.google.gson.GsonBuilder
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
-import com.intellij.execution.configurations.PathEnvironmentVariableUtil
 import com.intellij.ide.plugins.PluginManagerCore
 import com.intellij.openapi.extensions.PluginId
 import com.intellij.openapi.ide.CopyPasteManager
@@ -11,7 +11,6 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.util.SystemInfo
 import com.intellij.terminal.frontend.toolwindow.TerminalToolWindowTabsManager
-import com.intellij.util.EnvironmentUtil
 import java.awt.datatransfer.StringSelection
 import java.io.File
 
@@ -27,7 +26,7 @@ object AgentSetup {
         val bin = File(home, "bin").apply { mkdirs() }
         val plugin = PluginManagerCore.getPlugin(PluginId.getId("ai.pair")) ?: error("The AI Pair plugin isn't loaded.")
         val relay = plugin.pluginPath.resolve("host/relay.cjs").toString()
-        val node = PathEnvironmentVariableUtil.findInPath(if (SystemInfo.isWindows) "node.exe" else "node", EnvironmentUtil.getValue("PATH"), null)?.path ?: "node"
+        val node = NodeLocator.find()?.path ?: "node"
         if (SystemInfo.isWindows) {
             return File(bin, "pair-mcp.cmd").apply { writeText("@echo off\r\n\"$node\" \"$relay\" %*\r\n") }
         }

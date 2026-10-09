@@ -7,8 +7,11 @@ import com.google.gson.JsonArray
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import com.intellij.execution.ExecutionException
 import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.ide.plugins.PluginManagerCore
+import com.intellij.notification.NotificationGroupManager
+import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
@@ -36,10 +39,21 @@ class PairHost(private val project: Project) : Disposable {
         val root = project.basePath?.let(FileUtil::toSystemDependentName) ?: return
         val plugin = PluginManagerCore.getPlugin(PluginId.getId("ai.pair")) ?: return
         val script = plugin.pluginPath.resolve("host/intellij-host.cjs")
-        val process = GeneralCommandLine("node", script.toString())
-            .withParentEnvironmentType(GeneralCommandLine.ParentEnvironmentType.CONSOLE)
-            .withWorkDirectory(root)
-            .createProcess()
+        val node = NodeLocator.find()
+        if (node == null) {
+            hostFailed("Node.js wasn't found. Install Node 20 or later, or start the IDE from a shell where `node` works, then reopen the project.")
+            return
+        }
+        val process = try {
+            GeneralCommandLine(node.path, script.toString())
+                .withParentEnvironmentType(GeneralCommandLine.ParentEnvironmentType.CONSOLE)
+                .withWorkDirectory(root)
+                .createProcess()
+        } catch (e: ExecutionException) {
+            log.warn("AI Pair host didn't start", e)
+            hostFailed("Couldn't start the host with ${node.path}: ${e.message}")
+            return
+        }
         this.process = process
         input = process.outputStream.bufferedWriter(Charsets.UTF_8)
         thread(name = "AI Pair host", isDaemon = true) { read(process) }
@@ -55,6 +69,14 @@ class PairHost(private val project: Project) : Disposable {
             add("timing", PairSettings.parseTiming(settings.timing) ?: JsonObject())
             addProperty("confirmCommands", settings.confirmCommands)
         })
+    }
+
+    /** Tells the programmer the host isn't running, so pairing isn't available; this isn't a plugin error. */
+    private fun hostFailed(reason: String) {
+        log.warn("AI Pair host not started: $reason")
+        NotificationGroupManager.getInstance().getNotificationGroup("AI Pair")
+            .createNotification("AI Pair can't start", reason, NotificationType.ERROR)
+            .notify(project)
     }
 
     /** The settings changed, on the settings page or the panel's speed menu. */
