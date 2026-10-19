@@ -1,6 +1,7 @@
 **
 !dist/extension.js
 !dist/relay.js
+!dist/ompExtension.js
 !package.json
 !README.md
 !CHANGELOG.md

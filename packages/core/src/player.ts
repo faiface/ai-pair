@@ -1,7 +1,7 @@
 // Playing batches: what each action does, at a human pace. The same code plays a batch in the
 // programmer's editor and, to check it before it's queued, in memory (see rehearsal.ts).
 
-import type { Action, BatchResult, Candidate, Code, ErrorKind, RunResult, SpanTarget, Turn } from "@ai-pair/protocol"
+import type { Action, BatchResult, Beat, Candidate, Code, ErrorKind, RunResult, SpanTarget, Turn } from "@ai-pair/protocol"
 import * as nodePath from "node:path"
 import { actionKinds, CURSOR_MARKER, moveProblem, spanProblem, typeProblem } from "@ai-pair/protocol"
 import { resolveSpan, resolveSpot, spanCandidates, spotCandidates, type Resolution } from "./places"
@@ -10,6 +10,7 @@ import type { LineIds, Sighting } from "./lines"
 import type { Change, EditorPort, Focus, PanelPort } from "./ports"
 import { fileLines, isLineStart, lineEnd, lineText, position } from "./text"
 import type { Pacing } from "./timeline"
+import type { Timing } from "./timing"
 import { planTyping, readingTime } from "./typing"
 
 /** What playback reads and changes. */
@@ -127,6 +128,35 @@ export function transformScene(s: Scene, file: string, change: Change): void {
   if (s.point?.file === file) s.point = { file, start: map(s.point.start), end: map(s.point.end) }
 }
 
+/**
+ * About how long a beat's actions take to play, in normal-speed milliseconds: the span its `say`
+ * is spread across. A `run` counts as no time — how long a command takes is anyone's guess, and
+ * speech rides over it either way.
+ */
+export function coverage(actions: Action[], timing: Timing): number {
+  let ms = 0
+  for (const action of actions) {
+    if ("type" in action || "type_fast" in action) {
+      const fast = "type_fast" in action
+      const text: unknown = fast ? action.type_fast : action.type
+      if (typeof text !== "string") continue
+      const scale = fast ? timing.fastFactor : 1
+      const chunks = planTyping(text.replace(CURSOR_MARKER, ""), timing.type, false, () => 0.5, scale)
+      for (const chunk of chunks) ms += chunk.delay
+      if (text.includes(CURSOR_MARKER) && !text.endsWith(CURSOR_MARKER)) ms += (timing.beforeMoveMs + timing.afterMoveNearMs) * scale
+    } else if ("move" in action) ms += timing.beforeMoveMs + timing.afterMoveNearMs
+    else if ("select" in action) ms += timing.beforeSelectMs + timing.afterSelectMs
+    else if ("delete" in action) ms += timing.afterDeleteMs
+    else if ("point" in action) ms += timing.afterPointMs
+  }
+  return ms
+}
+
+/** What's left of a beat that was cut short: its actions still to do, as a beat of its own, if any. */
+function remainder(actions: Action[]): Beat[] {
+  return actions.length > 0 ? [{ do: actions }] : []
+}
+
 export class Player {
   /** In a reading pause, or waiting for the programmer to allow a command. */
   reading = false
@@ -140,12 +170,12 @@ export class Player {
   ) {}
 
   /** Plays a batch, saves the files it edited, and says how it went, and which lines that shows. */
-  async play(id: number, actions: Action[]): Promise<{ result: BatchResult; sightings: Sighting[] }> {
+  async play(id: number, beats: Beat[]): Promise<{ result: BatchResult; sightings: Sighting[] }> {
     const playing: Playing = { touched: new Set(), runs: [], sightings: [], edited: false, moved: false }
     this.playing = playing
     let result: BatchResult
     try {
-      result = await this.actions(id, actions, playing)
+      result = await this.beats(id, beats, playing)
     } finally {
       this.playing = undefined
     }
@@ -212,38 +242,95 @@ export class Player {
     if (span?.file === file) this.playing!.span = { file, start: map(span.start), end: map(span.end) }
   }
 
-  private async actions(id: number, actions: Action[], playing: Playing): Promise<BatchResult> {
-    for (let i = 0; i < actions.length; i++) {
-      if (this.stage.pacing.isInterrupted) return this.stopped(id, actions.slice(i), i > 0)
-      let outcome: Outcome
-      try {
-        outcome = await this.perform(actions[i]!, playing)
-      } catch (e) {
-        outcome = fail("invalid_action", e instanceof Error ? e.message : String(e))
+  /**
+   * Plays beats in order. A beat's `say` starts first and is spread over its actions; the next beat
+   * starts once both are done, so words and the work they're about stay together.
+   */
+  private async beats(id: number, beats: Beat[], playing: Playing): Promise<BatchResult> {
+    for (let i = 0; i < beats.length; i++) {
+      if (this.stage.pacing.isInterrupted) return this.stopped(id, beats.slice(i), i > 0)
+      const beat = beats[i]!
+      const actions = beat.do ?? []
+      const later = beats.slice(i + 1)
+      // Reading time still owed once the beat's work is done.
+      const leftMs = typeof beat.say === "string" ? await this.say(beat.say, actions) : undefined
+      // Once its words were shown, a beat cut short leaves only its actions still to do.
+      const effect = i > 0 || leftMs !== undefined
+      for (let j = 0; j < actions.length; j++) {
+        if (this.stage.pacing.isInterrupted) return this.stopped(id, [...remainder(actions.slice(j)), ...later], effect || j > 0)
+        let outcome: Outcome
+        try {
+          outcome = await this.perform(actions[j]!, playing)
+        } catch (e) {
+          outcome = fail("invalid_action", e instanceof Error ? e.message : String(e))
+        }
+        const rest = actions.slice(j + 1)
+        if (outcome.kind === "interrupted") {
+          if (outcome.consumed) return this.stopped(id, [...remainder(rest), ...later], true)
+          if (outcome.rest) return this.stopped(id, [...remainder([outcome.rest, ...rest]), ...later], true)
+          return this.stopped(id, [...remainder(actions.slice(j)), ...later], effect || j > 0)
+        }
+        if (outcome.kind === "error") {
+          if (outcome.sighting) playing.sightings.push(outcome.sighting)
+          const result: BatchResult = { id, status: "failed", error: { kind: outcome.error, message: outcome.message } }
+          if (outcome.candidates) result.error!.candidates = outcome.candidates
+          const unplayed = [...remainder(outcome.consumed ? rest : actions.slice(j)), ...later]
+          if (unplayed.length > 0) result.unplayed = unplayed
+          return result
+        }
       }
-      const rest = actions.slice(i + 1)
-      if (outcome.kind === "interrupted") {
-        if (outcome.consumed) return this.stopped(id, rest, true)
-        if (outcome.rest) return this.stopped(id, [outcome.rest, ...rest], true)
-        return this.stopped(id, actions.slice(i), i > 0)
-      }
-      if (outcome.kind === "error") {
-        if (outcome.sighting) playing.sightings.push(outcome.sighting)
-        const result: BatchResult = { id, status: "failed", error: { kind: outcome.error, message: outcome.message } }
-        if (outcome.candidates) result.error!.candidates = outcome.candidates
-        const unplayed = outcome.consumed ? rest : actions.slice(i)
-        if (unplayed.length > 0) result.unplayed = unplayed
-        return result
-      }
+      if (leftMs !== undefined && !(await this.hearOut(leftMs))) return this.stopped(id, later, true)
     }
     return { id, status: "completed" }
   }
 
   /** An interrupted batch. With no visible effect yet, it counts as discarded. */
-  private stopped(id: number, unplayed: Action[], effect: boolean): BatchResult {
+  private stopped(id: number, unplayed: Beat[], effect: boolean): BatchResult {
     const result: BatchResult = { id, status: effect ? "interrupted" : "discarded" }
     if (unplayed.length > 0) result.unplayed = unplayed
     return result
+  }
+
+  /**
+   * Shows a beat's words, over its `actions`, and resolves once the actions may begin: to the
+   * reading time still owed after they're done. Interrupted meanwhile, the words were still shown,
+   * and the loop over the actions stops at once.
+   */
+  private async say(text: string, actions: Action[]): Promise<number> {
+    const { panel } = this.stage
+    const timing = this.stage.config().timing
+    const spanMs = coverage(actions, timing) / this.stage.speed()
+    panel.post({ type: "say", text })
+    this.reading = true
+    // Read while the work plays: a moment to look at the words first, then the beat lasts as
+    // long as the longer of the reading and the work. Counted in paced time, so pausing holds both.
+    const ms = readingTime(text, timing.reading) / this.stage.speed()
+    panel.post({ type: "reading", ms })
+    this.stage.render()
+    const lead = actions.length > 0 ? Math.min(timing.voice.leadMs, ms) : 0
+    if (lead > 0) await this.stage.pacing.sleep(lead)
+    if (actions.length > 0) {
+      this.reading = false
+      this.stage.render()
+    }
+    return ms - lead - spanMs
+  }
+
+  /**
+   * Waits out a beat's reading time, so the next beat starts after it: the view never leaves
+   * code while words about it are still being read. False when interrupted meanwhile.
+   */
+  private async hearOut(leftMs: number): Promise<boolean> {
+    if (leftMs > 0) {
+      this.reading = true
+      this.stage.render()
+      await this.stage.pacing.sleep(leftMs)
+    }
+    if (this.reading) {
+      this.reading = false
+      this.stage.render()
+    }
+    return !this.stage.pacing.isInterrupted
   }
 
   /** Shows a change to the cursor, or to what the view follows, and keeps it in the programmer's view. */
@@ -266,13 +353,13 @@ export class Player {
     }
     const named = this.names(action, playing)
     if (typeof named === "object") return named
-    if (s.turn === "user" && !("say" in action) && !("point" in action)) {
-      return fail("not_your_turn", "During the programmer's turn, only `say` and `point` are allowed.")
+    if (s.turn === "user" && !("point" in action)) {
+      return fail("not_your_turn", "During the programmer's turn, beats may only talk and `point`.")
     }
 
     // An action at the cursor brings the view back to it from the code last pointed at. A far jump
     // back gets a far move's pause, before anything happens there; one to another file has its own.
-    const cursorAction = !("say" in action) && !("point" in action) && !("run" in action)
+    const cursorAction = !("point" in action) && !("run" in action)
     const lookingBack = cursorAction && s.focus === "point"
     const farBack = lookingBack && s.pointFar
     if (lookingBack) {
@@ -283,18 +370,6 @@ export class Player {
         if (!(await this.delay(timing.afterMoveFarMs))) return { kind: "interrupted" }
       }
       this.follow()
-    }
-
-    if ("say" in action) {
-      panel.post({ type: "say", text: action.say })
-      const ms = readingTime(action.say, timing.reading) / this.stage.speed()
-      this.reading = true
-      panel.post({ type: "reading", ms })
-      this.stage.render()
-      await this.stage.pacing.sleep(ms)
-      this.reading = false
-      this.stage.render()
-      return ok
     }
 
     if ("move" in action) {

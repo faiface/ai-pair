@@ -1,8 +1,8 @@
 // The protocol state machine: sessions, the batch queue, and reports. Playing a batch is player.ts.
 // See PROTOCOL.md for the rules implemented here.
 
-import type { Action, BatchResult, Event, Excerpt, FileContent, Report, Turn } from "@ai-pair/protocol"
-import { actionKinds, CURSOR_MARKER, ToolError } from "@ai-pair/protocol"
+import type { Beat, BatchResult, Event, Excerpt, FileContent, Report, Turn } from "@ai-pair/protocol"
+import { CURSOR_MARKER, ToolError } from "@ai-pair/protocol"
 import { fileDiff } from "./diff"
 import { LineIds, type Sighting } from "./lines"
 import { agentPath, displayPath, Player, type Scene } from "./player"
@@ -16,6 +16,11 @@ export type Config = {
   maxBlockMs: number
   /** During the programmer's turn, how long after their last edit `listen` returns. */
   navigatorIdleMs: number
+  /**
+   * How far ahead of playback the agent may work: `step` returns at once while fewer than this
+   * many batches wait in front of the new one, not yet playing. 0 waits for each batch.
+   */
+  workAheadBatches: number
   timing: Timing
   random: () => number
   /** Ask the programmer before each `run`. */
@@ -28,6 +33,7 @@ export type Config = {
 export const defaultConfig: Config = {
   maxBlockMs: 45_000,
   navigatorIdleMs: 3000,
+  workAheadBatches: 2,
   timing: defaultTiming,
   random: Math.random,
   confirmCommands: true,
@@ -35,9 +41,15 @@ export const defaultConfig: Config = {
   maxRunWaitMs: 600_000,
 }
 
+/**
+ * How long the editor may sit still between batches, while the agent writes the next, before the
+ * agent is told: a beat is natural, longer reads to the programmer as the session being stuck.
+ */
+const STILL_NOTE_MS = 5000
+
 type Batch = {
   id: number
-  actions: Action[]
+  beats: Beat[]
   state: "queued" | "playing" | "done"
   result?: BatchResult
   /** What it leaves behind, played in memory when it was queued: where the next batch is rehearsed from. */
@@ -83,6 +95,10 @@ type Session = {
   lines: LineIds
   /** For each file, the line the agent was last shown at each number, by its identity. */
   seen: Map<string, Map<number, number>>
+  /** When the queue ran dry while the agent was off writing, not waiting: the editor is still until its next batch. */
+  stillSince?: number
+  /** How long the editor sat still before the batch just submitted, to tell the agent. */
+  stillMs?: number
 }
 
 type Call = {
@@ -165,19 +181,21 @@ export class Controller {
     })
   }
 
-  step(actions: Action[], signal?: AbortSignal): Promise<Report> {
+  step(beats: Beat[], signal?: AbortSignal): Promise<Report> {
     return this.serialize(signal, async () => {
       const s = this.requireSession()
       // An empty batch only waits for the queued ones, so it isn't a batch of its own.
-      if (actions.length === 0) return this.block("step", {}, signal)
+      if (beats.length === 0) return this.block("step", {}, signal)
       // Played in memory first, so what would fail is reported now, not when the batch plays.
-      const rehearsal = s.stale || s.ended ? undefined : await this.rehearse(s, actions)
+      const rehearsal = s.stale || s.ended ? undefined : await this.rehearse(s, beats)
       // An interruption arriving meanwhile discards it, like any batch planned without knowing about it.
       const current = rehearsal && !s.stale && !s.ended
-      if (current && rehearsal.result.status === "failed") return this.reject(s, actions, rehearsal)
-      const batch: Batch = { id: this.nextBatchId++, actions, state: "queued", after: rehearsal?.after }
+      if (current && rehearsal.result.status === "failed") return this.reject(s, beats, rehearsal)
+      const batch: Batch = { id: this.nextBatchId++, beats, state: "queued", after: rehearsal?.after }
       if (current) {
         s.queue.push(batch)
+        if (s.stillSince !== undefined && Date.now() - s.stillSince >= STILL_NOTE_MS) s.stillMs = Date.now() - s.stillSince
+        s.stillSince = undefined
         this.kick(s)
       } else {
         this.discard(s, batch)
@@ -188,7 +206,9 @@ export class Controller {
 
   listen(signal?: AbortSignal): Promise<Report> {
     return this.serialize(signal, () => {
-      this.requireSession()
+      const s = this.requireSession()
+      // Waiting on the programmer on purpose: the editor's stillness from here on isn't the agent's.
+      s.stillSince = undefined
       return this.block("listen", {}, signal)
     })
   }
@@ -368,9 +388,13 @@ export class Controller {
   }
 
   pause(reason = "user"): void {
+    const was = this.pauseReasons.size
     this.pauseReasons.add(reason)
     this.session?.timeline.pause()
     this.render()
+    // The programmer's own Pause is told to a waiting agent at once — its report says paused —
+    // instead of leaving it to wonder at the next heartbeat why nothing is playing.
+    if (was === 0 && reason === "user") this.wakeWaiting()
   }
 
   /** Removes one pause reason, or all of them. Playback continues when none are left. */
@@ -385,14 +409,28 @@ export class Controller {
       s.timeline.resume()
     }
     this.render()
+    // And a waiting agent hears at once that things move again.
+    this.wakeWaiting()
+  }
+
+  /** Answers a waiting `step` or `listen` now, with the report as it stands. Never an `end`. */
+  private wakeWaiting(): void {
+    if (this.call && this.call.kind !== "end") this.finishCall(false)
   }
 
   setSpeed(speed: number): void {
     this.speed = speed
   }
 
+
   setConfirmCommands(confirm: boolean): void {
     this.config = { ...this.config, confirmCommands: confirm }
+  }
+
+  /** How far ahead of playback the agent may work, in batches waiting to play; 0 waits for each batch. */
+  setWorkAhead(batches: number): void {
+    this.config = { ...this.config, workAheadBatches: Math.max(0, Math.round(batches)) }
+    this.update()
   }
 
   /**
@@ -454,16 +492,21 @@ export class Controller {
   }
 
   /** Plays a batch in memory, from where the queued batches leave off, or the editor as it is. */
-  private rehearse(s: Session, actions: Action[]): ReturnType<typeof rehearse> {
+  private rehearse(s: Session, beats: Beat[]): ReturnType<typeof rehearse> {
     const from = s.queue.at(-1)?.after ?? { scene: s.scene, texts: new Map(), lines: s.lines, edits: new Set<string>() }
-    return rehearse(this.editor, this.config, from, actions, (file, line, id) => s.seen.get(file)?.get(line) === id)
+    return rehearse(this.editor, this.config, from, beats, (file, line, id) => s.seen.get(file)?.get(line) === id)
   }
 
   /** Reports a batch that played in memory failed, without queuing it; nothing else changes. */
-  private async reject(s: Session, actions: Action[], rehearsal: Awaited<ReturnType<typeof rehearse>>): Promise<Report> {
+  private async reject(s: Session, beats: Beat[], rehearsal: Awaited<ReturnType<typeof rehearse>>): Promise<Report> {
     const rehearsed = rehearsal.result
-    const index = actions.length - (rehearsed.unplayed?.length ?? 0) + 1
-    const rejected: NonNullable<Report["rejected"]> = { index, action: actions[index - 1]!, error: rehearsed.error! }
+    // The failing action leads what didn't play, so the beats and actions before it played.
+    const unplayed = rehearsed.unplayed ?? []
+    const beat = beats.length - unplayed.length + 1
+    const left = unplayed[0]?.do ?? []
+    const actions = beats[beat - 1]?.do ?? []
+    const action = actions.length - left.length + 1
+    const rejected: NonNullable<Report["rejected"]> = { beat, action, value: actions[action - 1]!, error: rehearsed.error! }
     if (rehearsed.code) rejected.code = rehearsed.code
     for (const sighting of rehearsal.sightings) this.saw(s, rehearsal.after.lines, sighting)
     const report = { ...this.snapshot(s, undefined, false), rejected }
@@ -513,17 +556,37 @@ export class Controller {
     if (s.queue[0]?.state === "playing" && s.timeline.isInterrupted) return false
     switch (call.kind) {
       case "step":
-        if (!call.batch) return s.queue.length === 0
-        return call.batch.state === "done" || s.queue[0] === call.batch
+        // Waiting with an empty batch is waiting for what played, and a run's output (or a failure)
+        // is what it waits for: it comes as soon as it lands, not after the batches queued behind it.
+        if (!call.batch) return s.queue.length === 0 || s.finished.some((r) => r.status !== "completed" || (r.runs?.length ?? 0) > 0)
+        return call.batch.state !== "queued" || this.room(s, call.batch)
       case "end":
         return s.queue.length === 0
       case "listen":
-        if (s.finished.some((r) => r.status !== "completed")) return true
+        // A failure, or a run's output, is news the agent is waiting for even while listening for
+        // the programmer: without this, a run it waits on with `listen` — as it's told to — would
+        // only reach it at the heartbeat. Its own finished typing is not news; `listen` stays the
+        // programmer's.
+        if (s.finished.some((r) => r.status !== "completed" || (r.runs?.length ?? 0) > 0)) return true
         if (s.queue.length > 0) return false
         if (s.scene.turn === "agent") return s.events.some(interrupting)
         // The programmer's edits during their turn wait until they pause typing.
         return s.events.some((e) => e.kind !== "edit") || (s.navigatorReady && s.events.some(interrupting))
     }
+  }
+
+  /**
+   * The agent may work ahead of `batch`: few enough batches wait in front of it, not yet playing,
+   * that writing more now is unlikely to be thrown away. A count, not a guess at playing time: the
+   * agent is held only once the queue is full.
+   */
+  private room(s: Session, batch: Batch): boolean {
+    let waiting = 0
+    for (const b of s.queue) {
+      if (b === batch) break
+      if (b.state === "queued") waiting++
+    }
+    return waiting < this.config.workAheadBatches
   }
 
   private pump(): void {
@@ -615,6 +678,11 @@ export class Controller {
     const b = submitted
     if (b && b.state !== "done") report.submitted = { id: b.id, status: b.state }
     if (waiting) report.waiting = true
+    if (this.pauseReasons.size > 0) report.paused = true
+    if (s.stillMs !== undefined) report.stillMs = s.stillMs
+    s.stillMs = undefined
+    // Named by its batch: the agent knows batches, not the panel's command ids.
+    if (s.confirming && s.queue[0]) report.confirming = { id: s.queue[0].id, command: s.confirming.command }
     return report
   }
 
@@ -630,7 +698,7 @@ export class Controller {
 
   private discard(s: Session, batch: Batch): void {
     batch.state = "done"
-    batch.result = { id: batch.id, status: "discarded", unplayed: batch.actions }
+    batch.result = { id: batch.id, status: "discarded", unplayed: batch.beats }
     s.finished.push(batch.result)
   }
 
@@ -661,7 +729,7 @@ export class Controller {
         if (!batch) break
         this.startHead(s)
         this.render()
-        const { result, sightings } = await s.player.play(batch.id, batch.actions)
+        const { result, sightings } = await s.player.play(batch.id, batch.beats)
         if (this.session !== s) break
         // It played as it did in memory, so the lines it typed are the ones later batches were rehearsed with.
         if (result.status === "completed" && batch.after) s.lines.adopt(batch.after.lines)
@@ -673,6 +741,10 @@ export class Controller {
         if (result.status !== "completed") this.interrupt(s)
         // Mark the next batch as playing before reporting, so the report says so.
         this.startHead(s)
+        // Run dry with no call waiting: the agent is writing the next batch while the editor sits still.
+        if (result.status === "completed" && s.queue.length === 0 && this.call === null && s.scene.turn === "agent") {
+          s.stillSince = Date.now()
+        }
         this.update()
       }
     } finally {
@@ -728,9 +800,12 @@ export class Controller {
     this.editor.renderCursor(s ? this.cursorView(s) : null, state, s?.scene.focus ?? "cursor")
     if (!s) return
     const paused = this.pauseReasons.size > 0
-    const key = `${state}/${s.scene.turn}/${paused}`
+    const ahead = s.queue.filter((b) => b.state === "queued").length
+    // Between calls the agent is at work: thinking, or writing the batches ahead.
+    const working = s.scene.turn === "agent" && this.call === null
+    const key = `${state}/${s.scene.turn}/${paused}/${ahead}/${working}`
     if (key === this.lastPosted) return
     this.lastPosted = key
-    this.panel.post({ type: "state", state, turn: s.scene.turn, paused })
+    this.panel.post({ type: "state", state, turn: s.scene.turn, paused, ahead, working })
   }
 }
