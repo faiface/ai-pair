@@ -77,6 +77,8 @@ export async function run(): Promise<void> {
 
   // The demo, sped up. If our own edits were mistaken for the programmer's, it would stop early.
   api.controller.setSpeed(20)
+  // Each step waits for the batches before it, so a test sees each one's report in turn.
+  api.controller.setWorkAhead(0)
   const started = Date.now()
   await api.playDemo()
   console.log(`demo played in ${Date.now() - started} ms`)
@@ -94,8 +96,8 @@ export async function run(): Promise<void> {
   fs.writeFileSync(file("other.txt"), "before\n")
   const other = await vscode.workspace.openTextDocument(file("other.txt"))
   await c.start("other edits")
-  await c.step([{ move: { file: "tool.txt", line: 1, to: "line_end" } }, { type_fast: `${"x".repeat(200)}▌` }])
-  const queued = c.step([{ type: "abc▌" }])
+  await c.step([{ do: [{ move: { file: "tool.txt", line: 1, to: "line_end" } }, { type_fast: `${"x".repeat(200)}▌` }] }])
+  const queued = c.step([{ do: [{ type: "abc▌" }] }])
   await sleep(1500)
   fs.writeFileSync(file("other.txt"), "after\n")
   await until(() => other.getText() === "after\n")
@@ -108,8 +110,8 @@ export async function run(): Promise<void> {
   // ...and a save participant, trimming what the agent typed when its batch is saved: its change isn't
   // the programmer's, and the batch queued behind it, planned against the untrimmed text, is discarded.
   await vscode.workspace.getConfiguration("files").update("trimTrailingWhitespace", true, vscode.ConfigurationTarget.Global)
-  await c.step([{ type: "\nend   ▌" }])
-  const trimmed = await c.step([{ type: "!▌" }])
+  await c.step([{ do: [{ type: "\nend   ▌" }] }])
+  const trimmed = await c.step([{ do: [{ type: "!▌" }] }])
   const trimDone = await c.step([])
   await vscode.workspace.getConfiguration("files").update("trimTrailingWhitespace", undefined, vscode.ConfigurationTarget.Global)
   assert.deepEqual([...trimmed.batches, ...trimDone.batches].map((b) => b.status), ["completed", "discarded"])
@@ -121,8 +123,8 @@ export async function run(): Promise<void> {
   // A programmer edit mid-typing interrupts, and the report shows exactly what was typed.
   const alphabet = "abcdefghijklmnopqrstuvwxyz"
   await c.start("interrupt test")
-  await c.step([{ move: { file: "scratch.ts", line: 1, to: "line_end" } }, { type: `${alphabet}▌` }])
-  const pending = c.step([{ type: "!▌" }])
+  await c.step([{ do: [{ move: { file: "scratch.ts", line: 1, to: "line_end" } }, { type: `${alphabet}▌` }] }])
+  const pending = c.step([{ do: [{ type: "!▌" }] }])
   // Past the pauses around moving into a new file (~1 s), and into the typing.
   await sleep(1500)
   const doc = await vscode.workspace.openTextDocument(file("scratch.ts"))
@@ -131,8 +133,8 @@ export async function run(): Promise<void> {
   const report = await pending
   const [typing, next] = report.batches
   assert.equal(typing?.status, "interrupted")
-  // What's left of the cut `type` comes back first, ready to resubmit.
-  const rest = typing.unplayed?.[0]
+  // What's left of the cut `type` comes back first, as a beat of its own, ready to resubmit.
+  const rest = typing.unplayed?.[0]?.do?.[0]
   const left = rest && "type" in rest ? rest.type.replace("▌", "") : ""
   const typed = alphabet.slice(0, alphabet.length - left.length)
   assert.ok(typed.length > 0 && left.length > 0 && alphabet.endsWith(left), `left: ${JSON.stringify(left)}`)
@@ -149,6 +151,25 @@ export async function run(): Promise<void> {
   })
   await c.end()
   console.log(`interrupted after typing ${JSON.stringify(typed)}`)
+
+  // Another extension answering the agent's typing, the way Pylance closes a `"""` the moment it's
+  // opened: its addition is taken back, and the batch plays on as if it never happened.
+  const closer = vscode.workspace.onDidChangeTextDocument((e) => {
+    const text = e.document.getText()
+    if (!e.document.fileName.endsWith("doc.py") || e.contentChanges[0]?.text !== '"' || text !== '"""') return
+    const edit = new vscode.WorkspaceEdit()
+    edit.insert(e.document.uri, e.document.positionAt(text.length), '"""')
+    void vscode.workspace.applyEdit(edit)
+  })
+  await c.start("reaction test")
+  await c.step([{ do: [{ move: { file: "doc.py", line: 1, to: "line_end" } }, { type: '"""A docstring."""▌' }] }])
+  const reacted = await c.step([])
+  closer.dispose()
+  assert.deepEqual(reacted.batches.map((b) => b.status), ["completed"])
+  assert.deepEqual(reacted.events, [])
+  assert.equal(await buffer("doc.py"), '"""A docstring."""')
+  await c.end()
+  console.log("another extension's reaction to the agent's typing is undone")
 
   // An agent connecting the way a harness does: the launcher, over stdio, from the project folder.
   await api.ready
@@ -169,8 +190,8 @@ export async function run(): Promise<void> {
   }
   c.setSpeed(20)
   await tool("start", { task: "relay test" })
-  await tool("step", { actions: [{ say: "Hello from the relay." }, { move: { file: "relay.txt", line: 1, to: "line_end" } }, { type: "typed via the relay▌" }] })
-  const last = await tool("step", { actions: [] })
+  await tool("step", { beats: [{ say: "Hello from the relay.", do: [{ move: { file: "relay.txt", line: 1, to: "line_end" } }, { type: "typed via the relay▌" }] }] })
+  const last = await tool("step", { beats: [] })
   assert.match(last, /Batch \d+ completed/)
   assert.equal(await buffer("relay.txt"), "typed via the relay")
   await tool("end", { summary: "Bye." })

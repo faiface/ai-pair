@@ -1,3 +1,4 @@
+export { createCopy } from "./copy"
 export { Controller, defaultConfig, type Config } from "./controller"
 export type {
   AgentState,
@@ -7,15 +8,17 @@ export type {
   EditOptions,
   EditorPort,
   Focus,
+  KeysPort,
   PanelEvent,
   PanelPort,
   Ref,
   RunOptions,
   SharedSelection,
+  VoicePort,
 } from "./ports"
 export { resolveSpan, resolveSpot } from "./places"
 export { terminalText } from "./text"
 export { hostPathStyle, samePath, withinFolder, type PathStyle } from "./paths"
 export { planTyping, readingTime } from "./typing"
-export { defaultTiming, withOverrides, type Cadence, type Reading, type Timing, type TimingOverrides } from "./timing"
+export { defaultTiming, withOverrides, type Cadence, type Reading, type Timing, type TimingOverrides, type VoiceTiming } from "./timing"
 export { Bridge, type BridgeOptions } from "./bridge"

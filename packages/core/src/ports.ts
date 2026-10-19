@@ -76,7 +76,16 @@ export type PanelEvent =
   | { type: "session"; active: false; reason: "agent" | "user" | "disconnected"; summary?: string }
   | { type: "say"; text: string }
   | { type: "reading"; ms: number }
-  | { type: "state"; state: AgentState; turn: Turn; paused: boolean }
+  | {
+      type: "state"
+      state: AgentState
+      turn: Turn
+      paused: boolean
+      /** Batches written and waiting behind the one playing. */
+      ahead: number
+      /** The agent is working on its next call, not waiting in one: thinking, or writing ahead. */
+      working: boolean
+    }
   | { type: "user"; text: string; ref?: Ref }
   | { type: "turn"; to: Turn; message?: string; ref?: Ref }
   | { type: "interrupt" }
@@ -88,11 +97,77 @@ export type PanelEvent =
       /** `exited`: a command left running in the background has ended since. */
       phase: "confirm" | "running" | "done" | "declined" | "background" | "exited"
       exitCode?: number
+      /** With `confirm`: the program the command runs, which the programmer can allow for the session. */
+      program?: string
     }
 
 export interface PanelPort {
   post(event: PanelEvent): void
 }
 
+/**
+ * The agent's voice, when there is one: it speaks a `say` out loud instead of leaving it to be read.
+ * `speak` settles when the words have been spoken, or dropped, or stopped; it never rejects playback.
+ * `spanMs` is how long the work the `say` covers will take to play: spread the words across it, so
+ * talking and typing run together and finish about together. `onStart` is called once, when the
+ * first words are heard — or when they never will be (dropped, stopped, failed) — since making
+ * speech takes a moment, and the typing a `say` covers must not run ahead of its words.
+ * `signal` takes back just these words, cut off if they're sounding: they've gone stale.
+ */
+export interface VoicePort {
+  /** Loaded and able to speak now. Not ready, playback falls back to the reading pause. */
+  readonly ready: boolean
+  /** The programmer turned it on: they listen to the agent's words, even while the voice still loads. */
+  readonly enabled: boolean
+  speak(text: string, spanMs?: number, onStart?: () => void, signal?: AbortSignal): Promise<void>
+  /**
+   * Starts making a `say`'s speech before it is spoken: called when its batch is queued, with the
+   * span `speak` will get, so the words are ready when the batch starts. `stop` drops what's made.
+   */
+  prepare(text: string, spanMs: number): void
+  /** Cuts off what is being said and drops what is queued: interrupted words are stale words. */
+  stop(): void
+}
+
+/**
+ * Key sounds, when they are on: told of each keystroke of the agent's as it lands. `text` is what
+ * the keystroke put in (a newline comes with the indent after it), or `"\b"` for a deletion.
+ */
+export interface KeysPort {
+  press(text: string): void
+}
+
 /** A change to a document, in the coordinates of the text before it. */
 export type Change = { offset: number; deleteLength: number; text: string }
+
+/** A file a stage changes, as it reads before and after it: `undefined` where it doesn't exist. */
+export type StageChange = { file: string; before?: string; after?: string; binary?: true }
+
+/**
+ * The author's private copy of the workspace, where it does the real work, unseen. It records the
+ * copy as it goes, in snapshots: each stage is one. Files are named by their absolute paths in the
+ * workspace, never in the copy, except `root`.
+ */
+export interface CopyPort {
+  /** Where the author works: the copy's counterpart of the workspace folder it was made for. */
+  readonly root: string
+  /** The snapshot of the copy as it was made, the workspace as it was then. */
+  readonly base: string
+  /** Records the copy as it is now, and returns the snapshot's id. */
+  snapshot(): Promise<string>
+  /** The files that differ between two snapshots, with their texts, or only `binary` for a binary file. */
+  changes(from: string, to: string): Promise<StageChange[]>
+  /** Writes a snapshot's version of a binary file over the workspace's, or deletes it if the snapshot has none. */
+  restore(snapshot: string, file: string): Promise<void>
+  /**
+   * Brings a change made in the workspace, `before` to `after`, into the copy's file. Where the
+   * author has since changed the same lines, the author's version stays: false then, or if the file
+   * is gone from the copy.
+   */
+  carry(file: string, before: string, after: string): Promise<boolean>
+  /** Removes the copy. */
+  dispose(): Promise<void>
+}
+
+/** Makes a private copy of the workspace folder `root`, as it is on disk. */
+export type CopyFactory = (root: string) => Promise<CopyPort>
