@@ -92,15 +92,18 @@ export class NarrationPanel implements PanelPort, vscode.WebviewViewProvider {
       case "speed":
         this.speed.set(m.value)
         return
-      case "reply":
+      case "reply": {
+        if (!c?.isActive) return
         // Replying means "go on with this", so any pause ends.
-        c?.resume()
-        c?.userMessage(m.text, m.attach ? this.selection.current() : undefined)
+        c.resume()
+        c.userMessage(m.text, m.attach ? this.selection.current() : undefined)
         return
+      }
       case "draft":
         // Typing a reply pauses playback, the way a pair stops when you start talking.
-        if (m.empty) c?.resume("reply")
-        else c?.pause("reply")
+        if (!c?.isActive) return
+        if (m.empty) c.resume("reply")
+        else c.pause("reply")
         return
       case "pause":
         c?.pause()

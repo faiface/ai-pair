@@ -30,6 +30,7 @@ export function activate(context: vscode.ExtensionContext): Api {
   controller.setSpeed(speed.get())
   controller.setTiming(config().get("timing", {}))
   controller.setConfirmCommands(config().get("confirmCommands", true))
+  controller.setWorkAhead(config().get("workAheadBatches", 2))
 
   const bridge = new Bridge(controller, {
     dir: discoveryDir(),
@@ -61,6 +62,7 @@ export function activate(context: vscode.ExtensionContext): Api {
       if (e.affectsConfiguration("aiPair.confirmCommands")) {
         controller.setConfirmCommands(config().get("confirmCommands", true))
       }
+      if (e.affectsConfiguration("aiPair.workAheadBatches")) controller.setWorkAhead(config().get("workAheadBatches", 2))
     }),
     vscode.commands.registerCommand("aiPair.playDemo", () => {
       if (!vscode.workspace.workspaceFolders?.length) {

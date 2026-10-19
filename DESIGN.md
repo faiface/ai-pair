@@ -54,6 +54,15 @@ Layout, top to bottom:
      give way to Hand back, the one labeled control, since it's the main
      action then. The speed opens a menu of 0.4× to 3.0×. The agent's color
      is on the dot only, never on the controls.
+     The words say what the wait is: while the agent thinks, the dot
+     breathes and a clock counts (_Agent is thinking · 8s_, and _no word from
+     it yet_ past a minute and a half), so a long think reads as work and a
+     stuck agent as stuck; while it plays, how many batches are written and
+     ready behind this one, and _writing more_ while the agent is at it.
+     After Interrupt the words are _Interrupted · it knows_ until the agent
+     visibly acts on it or the programmer speaks: a quiet agent that heard
+     must not read like one that didn't. While paused they say the work is
+     held, and the agent's reports say the same.
    - **The current message**, in large text (≈1.3× the editor font,
      *tunable*), high contrast. Its **top edge is fixed**, right under the
      header; its height grows downward with the message length. A new message
@@ -173,8 +182,12 @@ the close typed before the cursor leaves it, and the pause after it.
 `type_fast` shortens both by the same factor as its typing. With nothing
 after the `▌`, the cursor is already in place and there's neither.
 
-**Reading.** After a `say`: `clamp(words × 270, 1500, 9000)`. Enough to read
-the message at an ordinary pace, about 220 words a minute.
+**Reading.** A beat's `say` gets
+`clamp(words × 270, 1500, 9000)`: enough to read it at an ordinary pace,
+about 220 words a minute. Its actions start a moment after the words show,
+and the beat lasts as long as the longer of the reading and the work, so a
+short line over a long edit adds no wait, and a long line over a small one
+still gets read.
 
 **Speed.** The panel's speed menu (0.4×, 0.6×, 1.0×, 1.5×, 2.0×, 3.0×) scales
 all of it together, immediately, even mid-typing. It's the `aiPair.speed`

@@ -106,6 +106,7 @@ export function panelHtml(cspSource: string): string {
   .dot { position: relative; width: 7px; height: 7px; margin-left: 4px; border-radius: 50%; background: var(--accent); flex: none; }
   .dot.read { background: var(--read); animation: breathe 2.4s ease-in-out infinite; }
   .dot.dim { opacity: 0.45; }
+  .dot.think { animation: breathe 1.2s ease-in-out infinite; }
   .dot.ring { background: transparent; box-shadow: inset 0 0 0 1.5px var(--accent); }
   .dot.off { background: var(--muted); opacity: 0.45; }
   @keyframes breathe { 50% { opacity: 0.35; } }
@@ -165,6 +166,8 @@ export function panelHtml(cspSource: string): string {
   #idle-summary { margin-top: 6px; font-size: 14px; line-height: 1.5; }
   #idle-summary:empty { display: none; }
   #idle-text { margin-top: 4px; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+
+  .entry.tool { font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
 
   #composer { display: none; margin-top: 12px; }
   body.active #composer { display: block; }
@@ -231,7 +234,7 @@ export function panelHtml(cspSource: string): string {
   #tip[hidden] { display: none; }
 
   @media (prefers-reduced-motion: reduce) {
-    .dot.read, .arrive { animation: none; }
+    .dot.read, .dot.think, .arrive { animation: none; }
   }
 </style>
 </head>
@@ -277,6 +280,7 @@ export function panelHtml(cspSource: string): string {
         <textarea id="reply" rows="1" aria-label="Reply to the agent" placeholder="Reply to the agent…"></textarea>
         <button id="send" class="quiet" aria-label="Send" data-tip="Send (Enter)">${ICONS.send}</button>
       </div>
+
     </div>
   </section>
   <section id="history" aria-label="Earlier, newest first"></section>
@@ -296,6 +300,10 @@ export function panelHtml(cspSource: string): string {
   };
   let active = false, turn = "agent", paused = false, replaying = false;
   let state = null;     // the agent's state, as the extension last reported it
+  let ahead = 0;        // batches written and waiting behind the one playing
+  let working = false;  // the agent is at work between its calls: thinking, or writing ahead
+  let thinkingSince = 0, statusClock = null;   // how long the agent has been thinking, shown as it goes
+  let interruptNote = false;   // you pressed Interrupt: the status says the agent's been told until it acts or you speak
   let selection = null, selectionDismissed = false;   // the programmer's selection, offered with the reply
   let runId = null, runConfirming = false;   // the command shown in the run box
   let current = null;   // text of the current message
@@ -417,31 +425,54 @@ export function panelHtml(cspSource: string): string {
     typing: ["", "Agent is typing"],
     read: ["read", "Read this"],
     running: ["", "Running a command"],
-    thinking: ["dim", "Agent is thinking"],
-    paused: ["dim", "Paused"],
+    thinking: ["think", "Agent is thinking"],
+    paused: ["dim", "Paused · work is held"],
     listening: ["ring", "Your move"],
     navigator: ["ring", "Your turn"],
   };
 
+  /** Seconds as "8s" or "1:05". */
+  function elapsed(ms) {
+    const s = Math.floor(ms / 1000);
+    return s < 60 ? s + "s" : Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+  }
+
   function syncStatus() {
     if (!active) {
+      clearInterval(statusClock);
+      statusClock = null;
       ui.dot.className = "dot off";
       ui.status.textContent = "No session";
       return;
     }
-    const [cls, text] = runConfirming ? ["read", "Needs you"] : STATUS[state] || ["", "Session started"];
+    let [cls, text] = runConfirming ? ["read", "Needs you: allow the command?"] : STATUS[state] || ["", "Session started"];
+    if (!runConfirming && state === "thinking") {
+      // A clock, so a long think reads as work going on, and a stuck agent as one.
+      const ms = Date.now() - thinkingSince;
+      text += " · " + elapsed(ms) + (ms > 90000 ? " · no word from it yet" : "");
+    } else if (!runConfirming && (state === "typing" || state === "read" || state === "running")) {
+      if (ahead > 0) text += " · " + ahead + " more ready";
+      if (working) text += " · writing more";
+    }
+    // Until the agent visibly takes an interrupt in, the status says it landed: without this, a
+    // quiet agent after Interrupt reads exactly like one that never heard it.
+    if (interruptNote && (state === "listening" || state === "thinking")) text = "Interrupted · it knows";
     ui.dot.className = "dot " + cls;
     syncReading();
     ui.status.textContent = text;
   }
 
   function setState(e) {
-    state = e.state; turn = e.turn; paused = e.paused;
+    if (e.state === "thinking" && state !== "thinking") thinkingSince = Date.now();
+    if (e.state === "typing" || e.state === "read" || e.state === "running") interruptNote = false;
+    state = e.state; turn = e.turn; paused = e.paused; ahead = e.ahead || 0; working = !!e.working;
+    clearInterval(statusClock);
+    statusClock = state === "thinking" ? setInterval(syncStatus, 1000) : null;
     document.body.classList.toggle("paused", paused);
     document.body.classList.toggle("user-turn", turn === "user");
     ui.pause.classList.toggle("on", paused);
     ui.pause.setAttribute("aria-label", paused ? "Resume" : "Pause");
-    setTip(ui.pause, paused ? "Resume (Space)" : "Pause (Space)");
+    setTip(ui.pause, paused ? "Resume (Space)" : "Pause: hold the agent's work where it is (Space)");
     ui.turnLabel.textContent = turn === "user" ? "Hand back" : "My turn";
     ui.turn.setAttribute("aria-label", ui.turnLabel.textContent);
     setTip(ui.turn, turn === "user" ? "Hand the turn back to the agent, with your reply if you typed one" : "Take the turn: you drive, the agent navigates");
@@ -451,12 +482,15 @@ export function panelHtml(cspSource: string): string {
 
   function setActive(on) {
     active = on;
+    interruptNote = false;
     document.body.classList.toggle("active", on);
     ui.reply.disabled = !on;
     if (!on) {
       reading = null;
       runId = null; runConfirming = false; ui.run.className = "";
       closeSpeedMenu();
+    } else {
+      ui.reply.placeholder = turn === "user" ? "Ask the agent…" : "Reply to the agent…";
     }
     syncStatus();
     syncAttach();
@@ -492,11 +526,11 @@ export function panelHtml(cspSource: string): string {
           setActive(false);
         }
         return;
-      case "say": setNow(e.text); return;
+      case "say": interruptNote = false; setNow(e.text); syncStatus(); return;
       case "reading": startReading(e.ms); return;
       case "state": setState(e); return;
-      case "user": addYou(e.text, e.ref); return;
-      case "interrupt": addDivider("You interrupted"); return;
+      case "user": interruptNote = false; addYou(e.text, e.ref); return;
+      case "interrupt": addDivider("You interrupted"); interruptNote = true; syncStatus(); return;
       case "turn":
         addDivider(e.to === "user" ? "You took the turn" : "You handed the turn back");
         if (e.message || e.ref) addYou(e.message, e.ref);

@@ -135,6 +135,13 @@
           "default": true,
           "scope": "application",
           "markdownDescription": "Ask in the Pair panel before running each command the agent plays in the terminal (`run`). Turning this off lets the agent run commands without Claude Code's own permission prompt."
+        },
+        "aiPair.workAheadBatches": {
+          "type": "integer",
+          "default": 2,
+          "minimum": 0,
+          "maximum": 10,
+          "markdownDescription": "How many batches the agent may write ahead of what you're watching. It then plays without pausing to think between batches. When you step in, what it wrote ahead is dropped, so more means more thrown away. `0` makes it wait for each batch to finish."
         }
       }
     },

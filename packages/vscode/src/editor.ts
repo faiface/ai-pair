@@ -19,7 +19,17 @@ import type {
 } from "@ai-pair/core"
 import { PairTerminals } from "./terminal"
 
-type OwnEdit = { offset: number; deleteLength: number; text: string }
+/** `undo`: it takes back another extension's reaction, so it isn't one of ours that others react to. */
+type OwnEdit = { offset: number; deleteLength: number; text: string; undo?: boolean }
+
+/** What another extension changed in answer to our typing: `added` at `offset`, where `removed` was. */
+type Reaction = { offset: number; removed: string; added: string }
+
+/**
+ * A change this soon after one of ours, touching the spot where ours ended, is another extension
+ * answering our typing, like closing the quotes we opened; the programmer's cursor is elsewhere.
+ */
+const REACTION_MS = 300
 
 /** A place follow mode keeps in view. */
 type Target = { file: string; offset: number }
@@ -94,6 +104,11 @@ export class VsCodeEditor implements EditorPort, vscode.Disposable {
   private readonly terminals = new PairTerminals()
   private readonly mirror = new Map<string, string>()
   private readonly own = new Map<string, OwnEdit[]>()
+  /** Where our latest edit ended, and when it landed: what another extension's reaction would touch. */
+  private lastOwn?: { file: string; end: number; at: number }
+  private readonly reactions = new Map<string, Reaction[]>()
+  /** Our edits, one at a time: an undone reaction must never land between an edit and its offsets. */
+  private editing: Promise<unknown> = Promise.resolve()
   /** Files we're saving: changes to them meanwhile are by save participants, like format on save. */
   private readonly saving = new Set<string>()
   private cursor: CursorView | null = null
@@ -218,9 +233,22 @@ export class VsCodeEditor implements EditorPort, vscode.Disposable {
     })
   }
 
-  async edit(file: string, offset: number, deleteLength: number, text: string, options: EditOptions): Promise<void> {
+  edit(file: string, offset: number, deleteLength: number, text: string, options: EditOptions): Promise<void> {
+    return this.serially(async () => {
+      await this.undoReactions(file)
+      await this.apply(file, { offset, deleteLength, text }, options)
+    })
+  }
+
+  private serially(fn: () => Promise<void>): Promise<void> {
+    const run = this.editing.then(fn, fn)
+    this.editing = run.catch(() => {})
+    return run
+  }
+
+  private async apply(file: string, entry: OwnEdit, options: EditOptions): Promise<void> {
+    const { offset, deleteLength, text } = entry
     const editor = this.visibleEditor(file)
-    const entry: OwnEdit = { offset, deleteLength, text }
     const pending = this.own.get(file) ?? []
     this.own.set(file, pending)
     pending.push(entry)
@@ -240,6 +268,25 @@ export class VsCodeEditor implements EditorPort, vscode.Disposable {
     } finally {
       const i = pending.indexOf(entry)
       if (i !== -1) pending.splice(i, 1)
+    }
+  }
+
+  /**
+   * Takes back what other extensions added in answer to our typing, like Pylance closing the `"""`
+   * we opened: the agent types its closes itself, and planned its next edits against the text
+   * without them. The controller never hears of them, so to it they never happened.
+   */
+  private async undoReactions(file: string): Promise<void> {
+    const reactions = this.reactions.get(file)
+    if (!reactions) return
+    this.reactions.delete(file)
+    // Latest first: each one's offsets were taken with the earlier ones in place.
+    for (const r of reactions.reverse()) {
+      const doc = this.openDocument(file)
+      const range = doc && new vscode.Range(doc.positionAt(r.offset), doc.positionAt(r.offset + r.added.length))
+      // Something else changed it since: leave it be, rather than take out the wrong text.
+      if (!range || doc.getText(range) !== r.added) continue
+      await this.apply(file, { offset: r.offset, deleteLength: r.added.length, text: r.removed, undo: true }, { undoStopBefore: false, undoStopAfter: false })
     }
   }
 
@@ -350,12 +397,32 @@ export class VsCodeEditor implements EditorPort, vscode.Disposable {
       change.text === own.text
     ) {
       pending!.shift()
+      // An edit of ours that lands first moves the reactions after it, as it moves their text.
+      for (const r of this.reactions.get(file) ?? []) if (r.offset >= own.offset) r.offset += own.text.length - own.deleteLength
+      if (!own.undo) this.lastOwn = { file, end: own.offset + own.text.length, at: Date.now() }
+      return
+    }
+
+    // An undo or redo is the programmer's, even right where we just typed.
+    if (before !== undefined && e.reason === undefined && this.isReaction(file, changes)) {
+      const reactions = this.reactions.get(file) ?? []
+      this.reactions.set(file, reactions)
+      reactions.push(difference(before, after))
+      // Undone right away, after any edit of ours already under way; or before our next one.
+      void this.serially(() => this.undoReactions(file))
       return
     }
 
     if (before === undefined || !this.inWorkspace(file)) return
     if (this.byProgrammer(e, after)) this.controller?.userEdit(file, before, after, changes)
     else this.controller?.otherEdit(file, before, after, changes)
+  }
+
+  // While we save, changes are the save's own, like trimming whitespace, and are the controller's to hear.
+  private isReaction(file: string, changes: Change[]): boolean {
+    const last = this.lastOwn
+    if (!last || last.file !== file || this.saving.has(file) || Date.now() - last.at > REACTION_MS) return false
+    return changes.every((c) => c.offset <= last.end && last.end <= c.offset + c.deleteLength)
   }
 
   /**
@@ -602,4 +669,13 @@ export class VsCodeEditor implements EditorPort, vscode.Disposable {
     this.selectionType.dispose()
     this.pointType.dispose()
   }
+}
+
+/** One replacement that turns `before` into `after`: what lies between their common start and end. */
+function difference(before: string, after: string): Reaction {
+  let start = 0
+  while (start < before.length && start < after.length && before[start] === after[start]) start++
+  let end = 0
+  while (end < before.length - start && end < after.length - start && before[before.length - 1 - end] === after[after.length - 1 - end]) end++
+  return { offset: start, removed: before.slice(start, before.length - end), added: after.slice(start, after.length - end) }
 }

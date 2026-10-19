@@ -78,3 +78,5 @@ pair on…"). In Claude Code you can also run `/mcp__pair__start`.
 - `aiPair.timing`: fine-tune any typing or pause duration.
 - `aiPair.confirmCommands`: ask before each command the agent runs in the
   terminal (on by default).
+- `aiPair.workAheadBatches`: how many batches the agent may write ahead of
+  what you're watching (default 2).

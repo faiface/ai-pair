@@ -27,12 +27,13 @@ describe("reports", () => {
     expect(text).toMatch(/Batch 6 is playing/)
   })
 
-  it("says a rejected batch wasn't queued, which action would fail and why, and how the code would read", () => {
+  it("says a rejected batch wasn't queued, which beat and action would fail and why, and how the code would read", () => {
     const text = renderReport(
       report({
         rejected: {
-          index: 3,
-          action: { move: { line: 2, at: "x▌" } },
+          beat: 2,
+          action: 3,
+          value: { move: { line: 2, at: "x▌" } },
           error: { kind: "ambiguous", message: "2 matches", candidates: [{ line: 1, context: "x" }] },
           code: { file: "a.ts", lines: [{ number: 3, text: "y▌" }] },
         },
@@ -40,7 +41,7 @@ describe("reports", () => {
       "step",
     )
     expect(text).toMatch(/rejected/)
-    expect(text).toMatch(/action 3 would fail:\n  \{"move":\{"line":2,"at":"x▌"\}\}/)
+    expect(text).toMatch(/action 3 of beat 2 would fail:\n  \{"move":\{"line":2,"at":"x▌"\}\}/)
     expect(text).toMatch(/ambiguous: 2 matches\n  line 1: x/)
     expect(text).toMatch(/a\.ts:\n3  y▌/)
     expect(text).toMatch(/submit the whole batch again/)
@@ -74,7 +75,7 @@ describe("reports", () => {
     expect(text).toMatch(/line 2\n.*…\n.*line 58/)
   })
 
-  it("puts what the programmer did first, and lists unplayed actions ready to resubmit", () => {
+  it("puts what the programmer did first, and lists unplayed beats ready to resubmit", () => {
     const text = renderReport(
       report({
         events: [{ kind: "message", text: "use zod\nplease" }],
@@ -83,7 +84,7 @@ describe("reports", () => {
             id: 6,
             status: "interrupted",
             code: { file: "a.ts", lines: [{ number: 3, text: "  res.sta▌" }] },
-            unplayed: [{ type: "tus(▌)" }],
+            unplayed: [{ do: [{ type: "tus(▌)" }] }],
           },
           { id: 7, status: "discarded", unplayed: [{ say: "Next." }] },
         ],
@@ -93,12 +94,12 @@ describe("reports", () => {
     expect(text.indexOf("use zod")).toBeLessThan(text.indexOf("Batch 6"))
     expect(text).toMatch(/> please/)
     expect(text).toMatch(/Batch 6 interrupted/)
-    expect(text).toContain(JSON.stringify({ type: "tus(▌)" }))
+    expect(text).toContain(JSON.stringify({ do: [{ type: "tus(▌)" }] }))
     expect(text).toMatch(/Batch 7 discarded/)
     expect(text).toContain(JSON.stringify({ say: "Next." }))
   })
 
-  it("says why a batch failed, with the candidates, and which action failed", () => {
+  it("says why a batch failed, with the candidates, and which beat failed", () => {
     const text = renderReport(
       report({
         batches: [
@@ -113,7 +114,7 @@ describe("reports", () => {
                 { line: 31, context: "x = 2" },
               ],
             },
-            unplayed: [{ move: { line: 2, at: "x▌" } }],
+            unplayed: [{ do: [{ move: { line: 2, at: "x▌" } }] }],
           },
         ],
       }),
@@ -122,7 +123,7 @@ describe("reports", () => {
     expect(text).toMatch(/ambiguous: 2 matches/)
     expect(text).toMatch(/line 12: x = 1/)
     expect(text).toMatch(/line 31: x = 2/)
-    expect(text).toMatch(/the one that failed/)
+    expect(text).toMatch(/the beat that failed/)
   })
 
   it("shows a command's outcome and output", () => {
@@ -176,3 +177,4 @@ describe("saving", () => {
     expect(text).toMatch(/file on disk doesn't/)
   })
 })
+

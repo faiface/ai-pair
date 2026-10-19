@@ -4,7 +4,7 @@
 import * as path from "node:path"
 import * as vscode from "vscode"
 import type { Controller } from "@ai-pair/core"
-import type { Action, Report } from "@ai-pair/protocol"
+import type { Action, Beat, Report } from "@ai-pair/protocol"
 
 const DIR = "ai-pair-demo/src"
 export const SERVER = `${DIR}/server.ts`
@@ -19,119 +19,147 @@ app.listen(3000, () => console.log("Listening on http://localhost:3000"));
 `
 
 // Follows AGENT_GUIDE.md: left to right, with the close of whatever has one typed first, new lines
-// started at the end of the line above, and narration of what, why, and how right before its code.
-export const SCRIPT: Action[][] = [
-  [{ say: "Let me look at how the app is set up first." }, { move: { file: SERVER, line: 1, at: "▌import express" } }],
+// started at the end of the line above, and each beat's words played over the code they're about.
+export const SCRIPT: Beat[][] = [
+  [{ say: "Okay, let me see how the app's set up first.", do: [{ move: { file: SERVER, line: 1, at: "▌import express" } }] }],
   [
     {
-      say: "It's a single Express app in `server.ts`, with no database. I'll keep todos in memory for now, so we can focus on Express itself. Stop me if you'd prefer a real database.",
+      say: "So it's one Express app in `server.ts`, and there's no database. I'll keep the todos in memory for now, so we can stay on the Express side. Stop me if you'd rather have a real database.",
     },
   ],
   [
     {
-      say: "The plan: a `Todo` interface and a small in-memory store in `todos.ts`, then REST routes in `server.ts`. We'll get creating a todo working end to end first, then add the rest.",
+      say: "Here's my plan. I'll put a `Todo` interface and a little in-memory store in `todos.ts`, then add the routes in `server.ts`. Let's get creating a todo working end to end first, then fill in the rest.",
     },
-  ],
-  [
-    { say: "First, the shape of a todo: an interface with an id, a title, and whether it's done." },
-    { move: { file: TODOS, line: 1, to: "line_end" } },
-    { type: "▌\n" },
-    { type: "export interface Todo {\n  ▌\n}" },
-    { type: "id: number;\n  title: string;\n  done: boolean;▌" },
-  ],
-  [
-    { say: "The store is just an array and a counter for ids. `createTodo` is what the routes will call." },
-    { move: { line: 5, to: "line_end" } },
-    { type: "\n\nconst todos: Todo[] = [];\nlet nextId = 1;\n\nexport function createTodo(▌)" },
-    { type: "title: string▌" },
-    { move: { to: "line_end" } },
-    { type: ": Todo {\n  ▌\n}" },
-    { say: "It takes the next id, pushes the new todo onto the array, and returns it, so the route can send it straight back." },
-    { type: "const todo = { ▌ }" },
-    { type: "id: nextId++, title, done: false▌" },
-    { move: { to: "line_end" } },
-    { type: ";\n  todos.push(▌)" },
-    { type: "todo▌" },
-    { move: { to: "line_end" } },
-    { type: ";\n  return todo;▌" },
   ],
   [
     {
-      say: "Now the route. In Express, a route is an HTTP method, a path, and a handler that receives the request and the response.",
+      say: "I'll start with the shape of a todo: a `Todo` interface with an `id`, a `title`, and a `done` flag.",
+      do: [
+        { move: { file: TODOS, line: 1, to: "line_end" } },
+        { type: "▌\n" },
+        { type: "export interface Todo {\n  ▌\n}" },
+        { type: "id: number;\n  title: string;\n  done: boolean;▌" },
+      ],
     },
-    { move: { file: SERVER, line: 4, at: "app.use(express.json());▌" } },
-    { type: "\n\napp.post(▌)" },
-    { type: '"▌"' },
-    { type: "/todos▌" },
-    { move: { at: '"/todos"▌)' } },
-    { type: ", (▌)" },
-    { type: "req, res▌" },
-    { move: { at: "(req, res)▌)" } },
-    { type: " => {\n  ▌\n}" },
-  ],
-  [
-    { point: { line: 4, text: "app.use(express.json());" } },
-    { say: "`express.json()` up here is what parses the request body, so `req.body` is an object in our handler." },
-    { say: "We create the todo from the body's `title`, and answer 201 Created with the new todo as JSON." },
-    { type: "const todo = createTodo(▌)" },
-    { type: "req.body.title▌" },
-    { move: { to: "line_end" } },
-    { type: ";\n  res.status(▌)" },
-    { type: "201▌" },
-    { move: { to: "line_end" } },
-    { type: ".json(▌)" },
-    { type: "todo▌" },
-    { move: { to: "line_end" } },
-    { type: ";▌" },
-  ],
-  [
-    // As the `read` before it shows: the handler's closing line is line 9.
-    { move: { line: 9, to: "line_end" } },
-    { type: ";▌" },
-    { say: "We need to import `createTodo`." },
-    { move: { line: 1, at: 'import express from "express";▌' } },
-    { type_fast: "\nimport { ▌ }" },
-    { type_fast: "createTodo▌" },
-    { move: { to: "line_end" } },
-    { type_fast: ' from "▌"' },
-    { type_fast: "./todos▌" },
-    { move: { to: "line_end" } },
-    { type_fast: ";▌" },
   ],
   [
     {
-      say: "In a real session I'd now start the server and send a request to check it works. This is a scripted demo, so let's say it answered 201 with the new todo.",
+      say: "The store's just a `todos` array and a `nextId` counter. Then `createTodo`, which is what the routes will call.",
+      do: [
+        { move: { line: 5, to: "line_end" } },
+        { type: "\n\nconst todos: Todo[] = [];\nlet nextId = 1;\n\nexport function createTodo(▌)" },
+        { type: "title: string▌" },
+        { move: { to: "line_end" } },
+        { type: ": Todo {\n  ▌\n}" },
+      ],
+    },
+    {
+      say: "It builds the todo with `nextId++`, pushes it onto `todos`, and hands it back, so the route can send it straight to the client.",
+      do: [
+        { type: "const todo = { ▌ }" },
+        { type: "id: nextId++, title, done: false▌" },
+        { move: { to: "line_end" } },
+        { type: ";\n  todos.push(▌)" },
+        { type: "todo▌" },
+        { move: { to: "line_end" } },
+        { type: ";\n  return todo;▌" },
+      ],
     },
   ],
   [
-    { say: "Next, listing todos. First a function in the store that hands out the array." },
-    { move: { file: TODOS, line: 14, to: "line_end" } },
-    { type: "\n\nexport function listTodos(): Todo[] {\n  ▌\n}" },
-    { type: "return todos;▌" },
+    {
+      say: "Now the route. I'm adding an `app.post` for `/todos`, with a handler that gets `req` and `res`.",
+      do: [
+        { move: { file: SERVER, line: 4, at: "app.use(express.json());▌" } },
+        { type: "\n\napp.post(▌)" },
+        { type: '"▌"' },
+        { type: "/todos▌" },
+        { move: { at: '"/todos"▌)' } },
+        { type: ", (▌)" },
+        { type: "req, res▌" },
+        { move: { at: "(req, res)▌)" } },
+        { type: " => {\n  ▌\n}" },
+      ],
+    },
   ],
   [
-    { say: "And the route for it, right after the POST handler: `GET /todos` sends the list back as JSON." },
-    { move: { file: SERVER, line: 10, at: "});▌\n" } },
-    { type: "\n\napp.get(▌)" },
-    { type: '"▌"' },
-    { type: "/todos▌" },
-    { move: { at: '"/todos"▌)' } },
-    { type: ", (▌)" },
-    { type: "req, res▌" },
-    { move: { at: "(req, res)▌)" } },
-    { type: " => {\n  ▌\n}" },
-    { type: "res.json(▌)" },
-    { type: "listTodos()▌" },
-    { move: { to: "line_end" } },
-    { type: ";▌" },
+    {
+      say: "See `express.json()` up here? That's what parses the body, so `req.body` is already an object in our handler.",
+      do: [{ point: { line: 4, text: "app.use(express.json());" } }],
+    },
+    {
+      say: "I'll pass `req.body.title` to `createTodo`, and answer 201 with the new todo as JSON.",
+      do: [
+        { type: "const todo = createTodo(▌)" },
+        { type: "req.body.title▌" },
+        { move: { to: "line_end" } },
+        { type: ";\n  res.status(▌)" },
+        { type: "201▌" },
+        { move: { to: "line_end" } },
+        { type: ".json(▌)" },
+        { type: "todo▌" },
+        { move: { to: "line_end" } },
+        { type: ";▌" },
+      ],
+    },
+  ],
+  [
+    // As the `read` before it shows: the handler's closing line is line 9. Closing it is quiet work.
+    { do: [{ move: { line: 9, to: "line_end" } }, { type: ";▌" }] },
+    {
+      say: "Oh, and we need to import `createTodo` up top.",
+      do: [
+        { move: { line: 1, at: 'import express from "express";▌' } },
+        { type_fast: "\nimport { ▌ }" },
+        { type_fast: "createTodo▌" },
+        { move: { to: "line_end" } },
+        { type_fast: ' from "▌"' },
+        { type_fast: "./todos▌" },
+        { move: { to: "line_end" } },
+        { type_fast: ";▌" },
+      ],
+    },
+  ],
+  [
+    {
+      say: "Normally I'd start the server now and send it a request to check. This is a scripted demo though, so let's pretend it came back 201 with the new todo.",
+    },
+  ],
+  [
+    {
+      say: "Next up, listing them. First a `listTodos` function in the store that just returns the array.",
+      do: [
+        { move: { file: TODOS, line: 14, to: "line_end" } },
+        { type: "\n\nexport function listTodos(): Todo[] {\n  ▌\n}" },
+        { type: "return todos;▌" },
+      ],
+    },
+  ],
+  [
+    {
+      say: "And its route, right under the POST one: a `GET /todos` that sends the list back as JSON.",
+      do: [
+        { move: { file: SERVER, line: 10, at: "});▌\n" } },
+        { type: "\n\napp.get(▌)" },
+        { type: '"▌"' },
+        { type: "/todos▌" },
+        { move: { at: '"/todos"▌)' } },
+        { type: ", (▌)" },
+        { type: "req, res▌" },
+        { move: { at: "(req, res)▌)" } },
+        { type: " => {\n  ▌\n}" },
+        { type: "res.json(▌)" },
+        { type: "listTodos()▌" },
+        { move: { to: "line_end" } },
+        { type: ";▌" },
+      ],
+    },
   ],
   [
     // As the `read` before it shows: the handler's closing line is line 14.
-    { move: { line: 14, to: "line_end" } },
-    { type: ";▌" },
-    { say: "It needs the import too." },
-    { move: { line: 2, at: "import { createTodo▌ }" } },
-    { type: ", listTodos▌" },
+    { do: [{ move: { line: 14, to: "line_end" } }, { type: ";▌" }] },
+    { say: "And `listTodos` needs importing too.", do: [{ move: { line: 2, at: "import { createTodo▌ }" } }, { type: ", listTodos▌" }] },
   ],
 ]
 
@@ -148,12 +176,13 @@ function target(action: Action): { file?: string; line?: number } | undefined {
  * batch gives a line number: only numbers it has been shown are allowed. `current`: the file the
  * batches before worked in.
  */
-export async function stepScript(controller: Controller, batch: Action[], current: { file?: string }): Promise<Report> {
-  for (const action of batch) {
+export async function stepScript(controller: Controller, batch: Beat[], current: { file?: string }): Promise<Report> {
+  const actions = batch.flatMap((beat) => beat.do ?? [])
+  for (const action of actions) {
     const file = target(action)?.file
     if (file) current.file = file
   }
-  if (current.file && batch.some((a) => target(a)?.line !== undefined)) {
+  if (current.file && actions.some((a) => target(a)?.line !== undefined)) {
     // A file the batch creates isn't there to read yet; its one line is empty.
     await controller.read(current.file).catch(() => {})
   }

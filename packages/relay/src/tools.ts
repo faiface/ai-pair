@@ -40,13 +40,6 @@ const typeText = z.string({ error: (issue) => typeProblem(issue.input) }).superR
 
 const Action = z.union([
   action({
-    say: z
-      .string()
-      .describe(
-        "Narrate right before the actions it describes: what you're doing, why, and how your code does it. It's about your code and your choices, not how the language or its libraries work (unless the programmer asked to learn them). Explain the code, don't recite it. One to three sentences; `backticks` render as code. Playback pauses so the programmer can read it.",
-      ),
-  }),
-  action({
     move: z
       .strictObject({
         file: file.optional().describe("Switch to this file (created empty if it doesn't exist), only before your batch's first edit. Omit it to stay in your cursor's file."),
@@ -90,7 +83,7 @@ const Action = z.union([
   action({ delete: z.literal(true).describe("Delete the current selection; `select` first.") }),
   action({
     point: Span.describe(
-      "Highlight code without editing it or moving your cursor, to talk about it: point first, then `say` what's there. The code is given as for `select`. The programmer's view goes to the pointed code, and comes back to your cursor with your next move or edit.",
+      "Highlight code without editing it or moving your cursor, to talk about it: give it with the `say` about it, in one beat. The code is given as for `select`. The programmer's view goes to the pointed code, and comes back to your cursor with your next move or edit.",
     ),
   }),
   action({
@@ -103,6 +96,29 @@ const Action = z.union([
   }),
 ], { error: actionError })
 
+const Beat = z
+  .strictObject({
+    say: z
+      .string()
+      .optional()
+      .describe(
+        "What you say to the programmer about this beat's actions: what you're doing, why, and how your code does it. It's about your code and your choices, not how the language or its libraries work (unless the programmer asked to learn them). Explain the code, don't recite it. One to three sentences; `backticks` render as code. It's read beside the code while it plays.",
+      ),
+    do: z
+      .array(Action)
+      .optional()
+      .describe("The actions the `say` is about, played in order while it's said. Omit it to only talk; omit `say` for quiet work no one needs told about."),
+  }, { error: (issue) => (issue.code === "unrecognized_keys" ? beatError(issue.input) : undefined) })
+  .refine((beat) => beat.say !== undefined || (beat.do?.length ?? 0) > 0, "A beat needs a `say`, actions in `do`, or both.")
+
+/** Says how to fix a beat with fields of its own it shouldn't have: usually actions put on the beat itself. */
+function beatError(input: unknown): string | undefined {
+  if (typeof input !== "object" || input === null) return undefined
+  const kinds = actionKinds(input)
+  if (kinds.length === 0) return "A beat has only `say` and `do`."
+  return `A beat is \`{ say, do }\`: put ${kinds.map((k) => `\`${k}\``).join(" and ")} in its \`do\` list, like \`{ "say": "…", "do": [{ "${kinds[0]}": … }] }\``
+}
+
 /** An action's object: no unknown fields, and a clear message when two actions were put in one. */
 function action<T extends z.ZodRawShape>(shape: T) {
   return z.strictObject(shape, { error: (issue) => (issue.code === "unrecognized_keys" ? combined(issue.input) : undefined) })
@@ -113,6 +129,7 @@ function actionError(issue: { input?: unknown }): string | undefined {
   const input = issue.input
   if (typeof input !== "object" || input === null || Array.isArray(input)) return undefined
   const kinds = actionKinds(input)
+  if ("say" in input) return "`say` goes on the beat, next to `do`, not among its actions: `{ \"say\": \"…\", \"do\": [ … ] }`"
   if (kinds.length === 0) return `Not an action: each action has one of ${ACTION_KINDS.map((k) => `\`${k}\``).join(", ")}`
   if (kinds.length > 1) return combined(input)
   // A malformed field fails on its type, before the action's own check gets to say what's wrong.
@@ -135,7 +152,7 @@ function combined(input: unknown): string | undefined {
 export const TOOLS = {
   start: {
     description:
-      "Start a live pair programming session in the programmer's editor. Call this when the programmer asks to pair. The result includes the pairing guide: read it and follow it for the whole session. From then on, everything you do through `step` appears in their editor at a human pace, with your narration.",
+      "Start a live pair programming session in the programmer's editor. Call this as soon as the programmer asks to pair, before reading their code: they're waiting from that moment. Then, before you read or plan, send a `step` with one beat, just a `say`, telling them what you'll look at first, like \"Let me look around your project first.\", so they hear from you at once. The result includes the pairing guide: read it and follow it for the whole session. From then on, everything you do through `step` appears in their editor at a human pace, with your narration.",
     inputSchema: {
       task: z.string().optional().describe("A short description of what you'll work on, shown to the programmer."),
       cwd: z
@@ -145,22 +162,26 @@ export const TOOLS = {
     },
   },
   step: {
-    description: `Submit a batch of visible actions, played in the programmer's editor at a human pace. A batch is one idea: usually a \`say\` explaining what's next, then the few edits it describes. A batch works in one file: name it (in \`move\`, \`select\` or \`point\`) before its first edit, and start a new batch to switch files. Write each batch yourself, by hand: never generate batches from code you wrote out first, with a script.
+    description: `Submit a batch of beats, played in the programmer's editor at a human pace. A beat is what you say and the actions it's about, played together: the words start as the actions start, and the next beat starts once both are done. Talk only where there's something worth saying: several actions can share one \`say\`, and a beat of quiet work (closing a line, an import) needs none. To talk about code without touching it, \`point\` at it in the beat that says what's there.
 
-Pipelined: the call queues the batch and returns once the PREVIOUS batch has finished playing, with that batch's report. So plan the next batch while this one plays. The first call returns immediately.
+A batch is one idea, a few beats long: usually a beat explaining what's next with its first edits, then the rest, playing for about 10 to 30 seconds. One that plays for only a few seconds, like a single short line, is over before you've written the next, and the programmer watches a still editor meanwhile. A batch works in one file: name it (in \`move\`, \`select\` or \`point\`) before its first edit, and start a new batch to switch files. Write each batch yourself, by hand: never generate batches from code you wrote out first, with a script.
 
-A batch that would fail, e.g. on text that isn't on its line, is rejected at once: nothing of it is queued, and the report says which action and why. Fix it and submit the whole batch again.
+Work ahead: the call queues the batch and returns at once unless a couple of batches already wait to play; then it returns as one starts. Its report holds whatever finished meanwhile. So write the next batch right away, and the next: the programmer watches one batch while you write the following ones, and never waits for you to think. Don't send an empty batch to look at a report before going on: your queued batches were checked when you sent them, and \`read\` shows the code as they'll leave it. Wait only when the next batch truly depends on what played, like a \`run\`'s output.
 
-Read every report. It shows each finished batch's code as it now reads, with your cursor marked \`▌\`: check it's what you meant. If a batch was interrupted or failed, or the programmer said or did something, your later batches were discarded; what didn't play is listed, ready to resubmit, starting with what's left of an interrupted action. Take what happened into account and re-plan.
+A batch that would fail, e.g. on text that isn't on its line, is rejected at once: nothing of it is queued, and the report says which beat and action, and why. Fix it and submit the whole batch again.
 
-An empty batch waits for your queued batches without waiting for the programmer.`,
+Read every report. It shows each finished batch's code as it now reads, with your cursor marked \`▌\`: check it's what you meant. If a batch was interrupted or failed, or the programmer said or did something, your later batches were discarded; what didn't play is listed as beats, ready to resubmit, starting with what's left of an interrupted beat (its words were already heard). Take what happened into account and re-plan.
+
+When news comes, the programmer waits on you: a \`run\`'s output, a failure, or something they said or did. Answer it fast: first send a batch of one short \`say\` reacting to it, like "Just what we put in." or "Good catch.", before you work out what follows, then write the next batch while it plays. Keep that next batch small, a beat or two, so it comes soon; then go back to full batches.
+
+An empty batch waits until your queued batches finish, or a \`run\`'s output or a failure comes back, without waiting for the programmer: use it before acting on a \`run\`'s output.`,
     inputSchema: {
-      actions: z.array(Action).describe("Played in order."),
+      beats: z.array(Beat).describe("Played in order."),
     },
   },
   listen: {
     description:
-      "Wait for the programmer. First collects the reports of your queued batches, then returns when the programmer does something: a message (with the code they had selected, if any), an edit of theirs, a turn change, or ending the session. Call it whenever you're done or waiting: during a session, never end your turn. During the programmer's turn you're the navigator (only `say` and `point` work), and `listen` also returns shortly after they stop typing, so you can comment. If nothing happened in time, it says so: call it again.",
+      "Wait for the programmer. First collects the reports of your queued batches, then returns when the programmer does something: a message (with the code they had selected, if any), an edit of theirs, a turn change, or ending the session. Call it whenever you're done or waiting: during a session, never end your turn. During the programmer's turn you're the navigator (beats may only talk and `point`), and `listen` also returns shortly after they stop typing, so you can comment. If nothing happened in time, it says so: call it again.",
     inputSchema: {},
   },
   end: {

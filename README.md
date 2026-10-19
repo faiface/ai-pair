@@ -67,7 +67,7 @@ account. While you pair:
 | say something to the agent | type in the reply box, press Enter. Typing pauses playback. |
 | ask about some code | select it in the editor, then reply: the selection goes along (× leaves it out) |
 | let it run a command | the agent's tests and builds play in an *AI Pair* terminal; **Run**, **Allow for session**, or **Skip** in the panel |
-| stop it right now | **Interrupt**, or just edit the code: any edit interrupts |
+| stop it right now          | **Interrupt**, or just edit the code: any edit interrupts. The agent is told at once, and the panel says so until it takes it in             |
 | look around | scroll or switch files. Playback pauses until you **Resume**, which brings you back to the agent's cursor |
 | write a part yourself | **My turn**. The agent becomes the navigator and comments as you type. **Hand back** returns the turn, with your reply if you typed one |
 | change the pace | the speed menu (**1.0×**), from 0.4× to 3.0× |
@@ -88,10 +88,11 @@ agent (Claude Code, …) ── stdio MCP ──▶ pair-mcp ── local WebSoc
 
 The agent submits small batches of actions: say, move, select, type, delete,
 point, run. The extension plays them at a human pace and reports back exactly
-what happened, including everything you did in the meantime. The agent plans
-its next batch while you watch the current one, which hides most of its
-thinking time. And it's never more than one batch ahead, so your interruptions
-land immediately.
+what happened, including everything you did in the meantime. The agent writes
+its next batches while you watch the current one, up to about 30 seconds of
+playback ahead, which hides its thinking time. That cap is kept short on
+purpose: when you step in, what it wrote ahead is thrown away, and your
+interruption lands right away.
 
 The design is written up in:
 
@@ -153,6 +154,7 @@ code --install-extension ai-pair-*.vsix
 | `aiPair.agentName` | The name on the agent's cursor. |
 | `aiPair.timing` | Fine-tune any typing or pause duration, e.g. `{ "afterSelectMs": 900, "type": { "wordStartMs": 140 } }`. Every key is in [`timing.ts`](packages/core/src/timing.ts). |
 | `aiPair.confirmCommands` | Ask before each command the agent runs in the terminal (default on). Turned off, the agent's commands run without any prompt, not even its own. |
+| `aiPair.workAheadBatches` | How many batches the agent may write ahead of what you're watching (default 2, at most 10). More means fewer pauses; less means less thrown away when you step in. `0` waits for each batch. |
 
 ## Troubleshooting
 

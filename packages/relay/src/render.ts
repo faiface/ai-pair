@@ -11,15 +11,26 @@ export function renderReport(report: Report, tool: ReportingTool): string {
   for (const e of report.events) sections.push(renderEvent(e))
   for (const b of report.batches) sections.push(renderBatch(b))
   if (report.submitted) sections.push(`Batch ${report.submitted.id} is ${report.submitted.status}.`)
+  if (report.stillMs !== undefined) {
+    sections.push(
+      `The editor sat still for ${Math.round(report.stillMs / 1000)} seconds before it came: the programmer watched nothing happen. Keep something playing. Put more into each batch, about 10 to 30 seconds of playback, and send the next as soon as a \`step\` returns. Before you read or think at length, queue a \`say\` saying what you're doing.`,
+    )
+  }
   if (report.rejected) sections.push(renderRejected(report.rejected))
   if (report.cursor) sections.push(`Your cursor, in ${report.cursor.file}:\n${renderCode(report.cursor)}`)
-  if (report.waiting) {
+  if (report.confirming) {
+    sections.push(
+      `Batch ${report.confirming.id} is waiting for the programmer to allow \`${report.confirming.command}\`: nothing after it plays until they answer. Don't repeat the command; wait with \`listen\`. It comes back about every 45 seconds while they haven't answered, with this same line: just call it again.`,
+    )
+  } else if (report.paused) {
+    sections.push("Playback is paused in the editor: what you send is held and nothing plays until the programmer resumes. Wait with `listen`; it comes back when they resume.")
+  } else if (report.waiting) {
     sections.push(tool === "listen" ? "Nothing has happened yet. Call `listen` again." : "Nothing has finished yet. Carry on as usual.")
   }
   const ended = report.events.some((e) => e.kind === "end")
   if (tool === "end" && !ended) sections.push("The session has ended.")
   else if (report.turn === "user" && !ended) {
-    sections.push("It's the programmer's turn: you're the navigator. Only `say` and `point` work, and `listen` follows along.")
+    sections.push("It's the programmer's turn: you're the navigator. Beats may only talk and `point`, and `listen` follows along.")
   }
   return sections.length > 0 ? sections.join("\n\n") : "Nothing to report."
 }
@@ -38,7 +49,7 @@ function renderEvent(e: Event): string {
       if (e.by === "other") return `${e.file} was changed, not by the programmer but by a tool, a formatter, or on disk:\n${e.diff}`
       return `The programmer edited ${e.file}:\n${e.diff}`
     case "interrupt":
-      return "The programmer pressed Interrupt."
+      return "The programmer pressed Interrupt: stop what you were doing, and don't send it again. Say briefly where you stopped, then `listen` for what they want."
     case "turn":
       if (e.to === "user") return "The programmer took the turn."
       return `The programmer handed the turn back to you${e.message ? `:\n${quote(e.message)}` : "."}${e.selection ? `\n${renderExcerpt(e.selection)}` : ""}`
@@ -58,16 +69,19 @@ function renderBatch(b: BatchResult): string {
   }
   if (b.error) parts.push(renderError(b.error))
   if (b.unplayed) {
-    const label = b.error && b.error.kind !== "command_failed" ? "Not played, starting with the one that failed:" : "Not played:"
-    parts.push([label, ...b.unplayed.map((a) => `  ${JSON.stringify(a)}`)].join("\n"))
+    // Agents working ahead come to think of what they queued as done, and answer questions about
+    // code that was never typed. Say outright that none of it happened.
+    const label = b.error && b.error.kind !== "command_failed" ? "Not played, starting with the beat that failed" : "Not played"
+    const never = "never typed or said: it isn't in the file, and the programmer hasn't seen or heard it"
+    parts.push([`${label} (${never}):`, ...b.unplayed.map((beat) => `  ${JSON.stringify(beat)}`)].join("\n"))
   }
   return parts.join("\n")
 }
 
 function renderRejected(r: NonNullable<Report["rejected"]>): string {
   const parts = [
-    `Your batch was rejected: its action ${r.index} would fail:`,
-    `  ${JSON.stringify(r.action)}`,
+    `Your batch was rejected: action ${r.action} of beat ${r.beat} would fail:`,
+    `  ${JSON.stringify(r.value)}`,
     renderError(r.error),
   ]
   if (r.code) parts.push(`The code would read then, in ${r.code.file}:\n${renderCode(r.code)}`)
