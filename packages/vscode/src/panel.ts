@@ -4,6 +4,21 @@ import * as vscode from "vscode"
 import type { Controller, PanelEvent, PanelPort, Ref, SharedSelection } from "@ai-pair/core"
 import { panelHtml } from "./panelHtml"
 
+/** What the panel asks of its Start button: run the chosen agent in a terminal. Which agent is
+ *  chosen rarely, by command, so the panel doesn't carry a picker for it. */
+export type StarterPort = {
+  start(): void
+}
+
+/** A pairing mode as the panel shows it: its id lights the toggle, its word sits beside the status. */
+export type ModeChoice = { id: string; label: string }
+
+/** What the panel asks of the pairing mode: set the next session's, and read it back. */
+export type ModePort = {
+  set(id: string): void
+  choice(): ModeChoice
+}
+
 /** Messages from the webview. */
 type FromPanel =
   | { type: "ready" }
@@ -21,7 +36,9 @@ type FromPanel =
   /** A command the intro offers, like Set Up Agent. */
   | { type: "command"; command: string }
   | { type: "speed"; value: number }
-  | { type: "runDecision"; id: number; run: boolean; remember?: boolean }
+  | { type: "runDecision"; id: number; run: boolean; allow?: "program" | "all" }
+  | { type: "agentStart" }
+  | { type: "modeSet"; id: string }
 
 const MAX_LOG = 400
 
@@ -31,9 +48,12 @@ const PANEL_COMMANDS: ReadonlySet<string> = new Set(["aiPair.playDemo", "aiPair.
 export class NarrationPanel implements PanelPort, vscode.WebviewViewProvider {
   static readonly viewId = "aiPair.narration"
   controller?: Controller
+  starter?: StarterPort
+  mode?: ModePort
   private view?: vscode.WebviewView
   /** Everything posted so far, replayed when the view is (re)created. */
   private readonly log: PanelEvent[] = []
+  private modeChoice: ModeChoice = { id: "build", label: "Build" }
 
   constructor(
     private readonly resolvePath: (file: string) => string,
@@ -51,6 +71,19 @@ export class NarrationPanel implements PanelPort, vscode.WebviewViewProvider {
     void this.view?.webview.postMessage({ type: "speed", value })
   }
 
+  /** The pairing mode changed, or a session started under it. Not logged: only now matters. */
+  showMode(choice: ModeChoice): void {
+    this.modeChoice = choice
+    void this.view?.webview.postMessage({ type: "modeChoice", ...choice })
+  }
+
+  /** Opens one of the panel's own menus (from a command). The page ignores it mid-session,
+   *  when the row these live on is put away. */
+  openMenu(menu: "mode"): void {
+    this.reveal()
+    void this.view?.webview.postMessage({ type: "openMenu", menu })
+  }
+
   post(event: PanelEvent): void {
     this.log.push(event)
     if (this.log.length > MAX_LOG) this.log.splice(0, this.log.length - MAX_LOG)
@@ -59,6 +92,8 @@ export class NarrationPanel implements PanelPort, vscode.WebviewViewProvider {
       void vscode.commands.executeCommand("setContext", "aiPair.active", event.active)
       if (event.active) this.reveal()
     }
+    // Nothing plays until the programmer answers, so the question is brought into view.
+    if (event.type === "run" && event.phase === "confirm") this.reveal()
   }
 
   focusReply(): void {
@@ -88,19 +123,29 @@ export class NarrationPanel implements PanelPort, vscode.WebviewViewProvider {
         void this.view?.webview.postMessage({ type: "replay", events: this.log })
         this.showSpeed(this.speed.get())
         this.showSelection(this.selection.ref())
+        this.showMode(this.mode?.choice() ?? this.modeChoice)
         return
       case "speed":
         this.speed.set(m.value)
         return
-      case "reply":
+      case "reply": {
+        if (!c?.isActive) return
         // Replying means "go on with this", so any pause ends.
-        c?.resume()
-        c?.userMessage(m.text, m.attach ? this.selection.current() : undefined)
+        c.resume()
+        c.userMessage(m.text, m.attach ? this.selection.current() : undefined)
+        return
+      }
+      case "agentStart":
+        this.starter?.start()
+        return
+      case "modeSet":
+        this.mode?.set(m.id)
         return
       case "draft":
         // Typing a reply pauses playback, the way a pair stops when you start talking.
-        if (m.empty) c?.resume("reply")
-        else c?.pause("reply")
+        if (!c?.isActive) return
+        if (m.empty) c.resume("reply")
+        else c.pause("reply")
         return
       case "pause":
         c?.pause()
@@ -120,7 +165,7 @@ export class NarrationPanel implements PanelPort, vscode.WebviewViewProvider {
         c?.endSession()
         return
       case "runDecision":
-        c?.decideRun(m.id, m.run, m.remember)
+        c?.decideRun(m.id, m.run, m.allow)
         return
       case "open": {
         const uri = vscode.Uri.file(this.resolvePath(m.file))

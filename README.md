@@ -38,26 +38,45 @@ through code you don't know yet.
 
 ![The agent walks through a function line by line, highlighting each line and explaining it in the Pair panel](media/explain-line-by-line.gif)
 
-It works in VS Code, with the coding agent you already use. Setup is built in
-for Claude Code, Codex, OpenCode, Gemini CLI, Cursor and GitHub Copilot, and
-any agent that supports MCP can be connected by hand.
+It works in VS Code, with the agent you already use. Setup is built in for
+OMP, Claude Code, Codex, OpenCode, Gemini CLI, Cursor and GitHub Copilot,
+and any agent that supports MCP can be connected by hand. The panel's
+**Start** button runs the agent you picked in a terminal in the project —
+every agent is treated the same, and stays its own app.
 
 **Note:** It works best with strong models; weaker ones tend to struggle with
 this way of working.
 
 ## How to use it
 
-Once the extension is [installed](#install) and
-[connected to your agent](#connect-your-agent), keep using your agent as usual.
-When you want to pair:
+Once the extension is [installed](#install):
 
-1. Open the project in VS Code, and start your agent **in the same folder** (or
-   a subfolder of it).
-2. Ask it to pair: *"Let's pair on adding a settings page."* In Claude Code,
-   you can also run `/mcp__pair__start`. If you want to learn the technology
-   too, say so: *"…I'm new to Svelte, explain as you go."*
-3. The **Pair** panel opens in the secondary side bar, and the agent's cursor
-   appears in your editor.
+1. Open the project in VS Code and open the **Pair** panel.
+2. Press **Start**. It runs your agent (OMP,
+   Claude Code, Codex, OpenCode, Gemini CLI, or a command of your own,
+   flags and all; which one is picked with _AI Pair: Choose Agent to
+   Start_) in a free terminal already standing
+   in the project, or a new one there; the first time, it also gives that agent the pair server, so
+   there is nothing to set up by hand. If your agent is already running
+   somewhere, skip this and [connect it](#connect-your-agent) once instead.
+
+3. In the agent's terminal, ask it to pair: _"Let's pair on adding a
+   settings page."_ In Claude Code, you can also run `/mcp__pair__start`.
+   (An agent you started yourself must run **in the
+   same folder** as the project, or a subfolder of it.)
+
+   Beside **Start**, pick how the session pairs: **Build** (get it done,
+   shown as it goes) or **Learn** — the agent teaches in small pieces,
+   each one arriving only once the code on screen needs it, and runs
+   each so you see what it does. Learn comes at three splits
+   of who does the work: _Show me_ (it drives), _Together_ (a worked
+   example, then you write the next one like it), _Let me try_ (you
+   drive, it navigates). The pick is remembered and fixed for the
+   session; the agent is told when the session starts, so you only ever
+   say what the task is.
+
+4. The **Pair** panel opens in the secondary side bar, and the agent's
+   cursor appears in your editor.
 
 Anything you say or edit interrupts the agent, so its next move takes it into
 account. While you pair:
@@ -66,8 +85,8 @@ account. While you pair:
 |---|---|
 | say something to the agent | type in the reply box, press Enter. Typing pauses playback. |
 | ask about some code | select it in the editor, then reply: the selection goes along (× leaves it out) |
-| let it run a command | the agent's tests and builds play in an *AI Pair* terminal; **Run**, **Allow for session**, or **Skip** in the panel |
-| stop it right now | **Interrupt**, or just edit the code: any edit interrupts |
+| let it run a command       | the agent's tests and builds play in an _AI Pair_ terminal; **Run**, **Allow _npm_** (that program), **Allow all**, or **Skip** in the panel |
+| stop it right now          | **Interrupt**, or just edit the code: any edit interrupts. The agent is told at once, and the panel says so until it takes it in             |
 | look around | scroll or switch files. Playback pauses until you **Resume**, which brings you back to the agent's cursor |
 | write a part yourself | **My turn**. The agent becomes the navigator and comments as you type. **Hand back** returns the turn, with your reply if you typed one |
 | change the pace | the speed menu (**1.0×**), from 0.4× to 3.0× |
@@ -88,10 +107,11 @@ agent (Claude Code, …) ── stdio MCP ──▶ pair-mcp ── local WebSoc
 
 The agent submits small batches of actions: say, move, select, type, delete,
 point, run. The extension plays them at a human pace and reports back exactly
-what happened, including everything you did in the meantime. The agent plans
-its next batch while you watch the current one, which hides most of its
-thinking time. And it's never more than one batch ahead, so your interruptions
-land immediately.
+what happened, including everything you did in the meantime. The agent writes
+its next batches while you watch the current one, up to about 30 seconds of
+playback ahead, which hides its thinking time. That cap is kept short on
+purpose: when you step in, what it wrote ahead is thrown away, and your
+interruption lands right away.
 
 The design is written up in:
 
@@ -134,15 +154,16 @@ code --install-extension ai-pair-*.vsix
 
    | Agent | Where |
    |---|---|
+   | **OMP**                                                                          | `~/.omp/agent/mcp.json` (a named profile's folder when one is in use). The panel's **Start** does this for you when it starts OMP |
    | **Claude Code** (the CLI, the IDE extensions, the Claude desktop app's Code tab) | `claude mcp add --scope user`, or `~/.claude.json` without the `claude` command |
    | **Codex** (the CLI, the IDE extension, the app) | `~/.codex/config.toml` (or in `$CODEX_HOME`) |
    | **OpenCode** | `~/.config/opencode/opencode.json` (`.jsonc` if you have one), on Windows too |
    | **Gemini CLI** | `~/.gemini/settings.json` |
    | **Cursor** | `~/.cursor/mcp.json` |
    | **Another agent** | copies an MCP server configuration to the clipboard: a stdio server named `pair` running the launcher |
-
    **GitHub Copilot** in VS Code needs none of this: the extension gives it
    the `pair` server itself.
+
 3. **Restart your agent** so it picks up the new server.
 
 ## Settings
@@ -153,6 +174,7 @@ code --install-extension ai-pair-*.vsix
 | `aiPair.agentName` | The name on the agent's cursor. |
 | `aiPair.timing` | Fine-tune any typing or pause duration, e.g. `{ "afterSelectMs": 900, "type": { "wordStartMs": 140 } }`. Every key is in [`timing.ts`](packages/core/src/timing.ts). |
 | `aiPair.confirmCommands` | Ask before each command the agent runs in the terminal (default on). Turned off, the agent's commands run without any prompt, not even its own. |
+| `aiPair.workAheadBatches` | How many batches the agent may write ahead of what you're watching (default 2, at most 10). More means fewer pauses; less means less thrown away when you step in. `0` waits for each batch. |
 
 ## Troubleshooting
 
@@ -163,6 +185,9 @@ code --install-extension ai-pair-*.vsix
   it up. *AI Pair: Set Up Agent* marks the agents that are set up. With
   Claude Code, `claude mcp list` should show `pair`. With Copilot, `pair`
   should be in *MCP: List Servers*; start it there if it isn't running.
+- **The terminal Start uses can't find the agent.** The agent's command
+  isn't installed, or isn't on the PATH your shell has. Install it, or pick
+  _Custom command…_ by the Start button and give its full path.
 - **After updating the extension,** reload the VS Code window and restart the
   agent.
 

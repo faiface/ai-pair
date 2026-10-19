@@ -32,9 +32,20 @@ Status: **draft**.
 - **The VS Code adapter** is a thin layer over the VS Code API: apply edits with
   undo stops, report document changes, render decorations, scroll, save. It
   tells the agent's edits apart from the programmer's by tracking the document
-  versions its own edits produce.
+  versions its own edits produce. A change landing within 300 ms right where
+  its last edit ended, and not an undo or a save's, is another extension
+  answering its typing (auto-closing quotes, format on type): it undoes that
+  before its next edit, so it never reaches the core.
 - **The narration panel** is a webview. It talks to the extension via
   `postMessage`.
+- **Starting an agent** is as thin as it looks: the panel's Start button
+  types the chosen agent's command into a terminal — an open one only if
+  shell integration says it is free and already standing in the workspace,
+  else a new one there — after setting the pair server up in that agent
+  if it isn't. The
+  extension hosts no agent; each harness stays its own app and reaches the
+  editor through `pair-mcp`, so nothing about the protocol changes for any
+  of them.
 
 ### Why a relay
 
@@ -152,16 +163,54 @@ VS Code itself (Copilot) need no setup: the extension provides the server to
 them through VS Code's MCP API, running the relay directly in the workspace.
 For any other harness it copies the config snippet to the clipboard. The
 extension offers this once, the first time it starts. The harnesses and their
-files are in [`agents.ts`](packages/vscode/src/agents.ts).
+files are in [`agents.ts`](packages/vscode/src/agents.ts). OMP's entry
+carries `timeout: 0`, since pair calls block while the
+programmer watches and replies, far past OMP's 30-second MCP default.
 
-**Each session.** The programmer asks the agent to pair ("let's pair on adding
-a todos API, I'm new to Express"), or runs the server's `start` prompt (in
-Claude Code: `/mcp__pair__start`). The agent calls `start`, which returns the
-[agent guide](AGENT_GUIDE.md) along with the first report.
+**Each session.** The programmer picks the session's pairing mode beside
+the panel's Start button (Build, or Learn at three splits of who does the
+work; remembered, and fixed once a session starts), asks the agent to pair
+("let's pair on adding a todos API, I'm new to Express"), or runs the
+server's `start` prompt (in Claude Code: `/mcp__pair__start`). The agent
+calls `start`, which returns the [agent guide](AGENT_GUIDE.md) and the
+mode's page (`modeGuide.ts` in the relay, from the mode in the first
+report) along with the first report.
 
-**Later, from the editor.** Starting from the editor (type the task in the
-panel, and the extension launches the harness in the integrated terminal)
-would be a convenience on top, with a small adapter per harness. Not in v1.
+**An agent, from the editor.** The panel's **Start** (or _AI Pair: Start
+Agent_) sets the pair server up in the chosen agent if it isn't, then
+opens a terminal in the workspace folder and runs its command there
+(`omp`, `claude`, `codex`, `opencode`, `gemini`, or a custom command the
+programmer gave, flags and all). That is all it does: the conversation
+happens in the agent's own screen, and pairing starts from there as
+above. The pick is remembered; Cursor has no terminal command, so it
+isn't offered.
+
+**What didn't play leaves OMP's history.** When the programmer interrupts,
+the batches written ahead never play, but the `step` calls that sent them
+stay in the agent's history, and a model tends to believe what it sees
+itself write. So an OMP started from the panel also loads a small OMP extension
+([`ompExtension.ts`](packages/relay/src/ompExtension.ts), bundled to
+`dist/ompExtension.js` and passed with `-e`). On OMP's `context` hook it runs
+[`history.ts`](packages/relay/src/history.ts): it reads each interrupted,
+discarded or failed batch's "Not played" lines back from its report, finds
+the `step` call that sent that batch (by the "Batch N is queued" line in its
+result, or, when an interruption discarded it at once, as the last batch its
+own result lists), and cuts that call down to the beats that played. A beat
+cut short keeps its `say`, which was heard, and the actions that played
+whole. Where OMP keeps the provider's own record of the message (OpenAI
+Responses items, sent back in its place to keep the model's reasoning), the
+call is cut there too. It
+changes only what the model is sent, never the saved session, and it depends
+on the history alone, so the same history always gives the same rewrite and
+the provider's prompt cache still holds. Other agents have no such hook; they
+go by the report, which says plainly that what didn't play never happened.
+
+## How a beat plays
+
+A beat's words and its actions start together, and the next beat starts once
+both are done. The actions start after `timing.voice.leadMs` (or the reading
+time, if shorter), and the beat lasts as long as the longer of reading and
+working.
 
 ## Distribution
 
@@ -193,6 +242,7 @@ the official MCP TypeScript SDK.
 
 - **Permission prompts.** When the harness asks for permission, it notifies the
   programmer itself.
-- **Starting from the editor** (see above).
+- **Starting other harnesses from the editor.** OMP starts from the panel
+  (above); the rest are still launched by the programmer.
 - **Multiple agents** in one window.
 - **Zed.**

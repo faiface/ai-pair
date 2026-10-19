@@ -32,3 +32,5 @@ await esbuild.build({
   define: { AI_PAIR_VERSION: JSON.stringify(version) },
   outfile: "dist/relay.js",
 })
+// An OMP started from the panel loads this, to send its model only the beats that played.
+await esbuild.build({ ...common, format: "esm", entryPoints: ["../relay/src/ompExtension.ts"], outfile: "dist/ompExtension.js" })

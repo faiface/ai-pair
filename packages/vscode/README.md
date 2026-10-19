@@ -33,28 +33,46 @@ through code you don't know yet.
 
 ![The agent walks through a function line by line, highlighting each line and explaining it in the Pair panel](https://raw.githubusercontent.com/faiface/ai-pair/main/media/explain-line-by-line.gif)
 
-It works in VS Code, with the coding agent you already use. Setup is built in
-for Claude Code, Codex, OpenCode, Gemini CLI, Cursor and GitHub Copilot, and
-any agent that supports MCP can be connected by hand.
+It works in VS Code, with the agent you already use. Setup is built in for
+OMP, Claude Code, Codex, OpenCode, Gemini CLI, Cursor and GitHub Copilot,
+and any agent that supports MCP can be connected by hand. The panel's
+**Start** button runs the agent you picked in a terminal in the project —
+every agent is treated the same, and stays its own app.
 
 **Note:** It works best with strong models; weaker ones tend to struggle with
 this way of working.
 
 ## Set up
 
+The easy way needs none: open a project, press **Start** in the Pair panel.
+It runs your agent (OMP, Claude Code, Codex, OpenCode, Gemini CLI, or a
+command of your own; which one is picked with *AI Pair: Choose Agent to
+Start*) in a free terminal already standing in the project, or a new one
+there, and the first time also gives it the pair server.
+
+To connect an agent you run yourself:
+
 1. Open a project folder.
-2. Run **AI Pair: Set Up Agent** and pick your agents: Claude Code, Codex,
-   OpenCode, Gemini CLI, Cursor. It adds a `pair` server to each one's
-   user-wide MCP configuration. **Another agent** copies an MCP configuration
-   instead: a stdio server named `pair` running `~/.ai-pair/bin/pair-mcp`
-   (`pair-mcp.cmd` on Windows).
+2. Run **AI Pair: Set Up Agent** and pick your agents: OMP, Claude Code,
+   Codex, OpenCode, Gemini CLI, Cursor. It adds a `pair` server to each
+   one's user-wide MCP configuration. **Another agent** copies an MCP
+   configuration instead: a stdio server named `pair` running
+   `~/.ai-pair/bin/pair-mcp` (`pair-mcp.cmd` on Windows).
    GitHub Copilot needs no setup.
 3. Restart your agent.
 
 ## Pair
 
-Start your agent in the folder that's open in VS Code and ask it to pair ("let's
-pair on…"). In Claude Code you can also run `/mcp__pair__start`.
+Start your agent in the folder that's open in VS Code — **Start** does
+that for you — and ask it to pair ("let's pair on…"). In Claude Code you
+can also run `/mcp__pair__start`.
+
+Beside **Start**, pick how the session pairs: **Build** (get it done,
+shown as it goes) or **Learn** (the agent teaches in small pieces), at
+three splits of who does the work: *Show me*, *Together* (a worked
+example, then you write the next one like it), *Let me try* (you drive).
+The pick is remembered, fixed for the session, and told to the agent at
+the start, so you only say what the task is.
 
 - **Reply:** type in the panel's reply box and press Enter. Typing pauses
   playback.
@@ -62,7 +80,8 @@ pair on…"). In Claude Code you can also run `/mcp__pair__start`.
   goes along (× leaves it out). Or right-click it: *Ask the Agent About the
   Selection*.
 - **Commands:** the agent's tests and builds play in an *AI Pair* terminal.
-  Choose **Run**, **Allow for session**, or **Skip** in the panel.
+  Choose **Run**, **Allow** that program (like `npm`) or **Allow all** for
+  the session, or **Skip** in the panel.
 - **Interrupt:** the button, or just edit the code.
 - **Look around:** scrolling or switching files pauses playback. **Resume**
   brings you back.
@@ -78,3 +97,5 @@ pair on…"). In Claude Code you can also run `/mcp__pair__start`.
 - `aiPair.timing`: fine-tune any typing or pause duration.
 - `aiPair.confirmCommands`: ask before each command the agent runs in the
   terminal (on by default).
+- `aiPair.workAheadBatches`: how many batches the agent may write ahead of
+  what you're watching (default 2).

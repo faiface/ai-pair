@@ -76,7 +76,16 @@ export type PanelEvent =
   | { type: "session"; active: false; reason: "agent" | "user" | "disconnected"; summary?: string }
   | { type: "say"; text: string }
   | { type: "reading"; ms: number }
-  | { type: "state"; state: AgentState; turn: Turn; paused: boolean }
+  | {
+      type: "state"
+      state: AgentState
+      turn: Turn
+      paused: boolean
+      /** Batches written and waiting behind the one playing. */
+      ahead: number
+      /** The agent is working on its next call, not waiting in one: thinking, or writing ahead. */
+      working: boolean
+    }
   | { type: "user"; text: string; ref?: Ref }
   | { type: "turn"; to: Turn; message?: string; ref?: Ref }
   | { type: "interrupt" }
@@ -88,6 +97,8 @@ export type PanelEvent =
       /** `exited`: a command left running in the background has ended since. */
       phase: "confirm" | "running" | "done" | "declined" | "background" | "exited"
       exitCode?: number
+      /** With `confirm`: the program the command runs, which the programmer can allow for the session. */
+      program?: string
     }
 
 export interface PanelPort {

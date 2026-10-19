@@ -154,6 +154,7 @@ export const testConfig: Config = {
     type: { charMs: 100, jitter: 0.25, wordStartMs: 0, punctuationMs: 0, openBracketMs: 0, newlineMs: 0 },
     fastFactor: 0.1,
     reading: { msPerWord: 100, minMs: 500, maxMs: 2000 },
+    voice: { leadMs: 10 },
     beforeMoveMs: 100,
     afterMoveNearMs: 0,
     afterMoveFarMs: 0,
@@ -164,6 +165,8 @@ export const testConfig: Config = {
     afterPointMs: 0,
   },
   navigatorIdleMs: 1000,
+  // One batch at a time, as most tests expect; working ahead has tests of its own.
+  workAheadBatches: 0,
   random: () => 0.5,
 }
 

@@ -48,12 +48,26 @@ Layout, top to bottom:
 1. **The band**, a full-width area on the editor's background, holding
    everything about now:
    - **Its header**: the agent's state (a colored dot and a few words: *Agent
-     is typing*, *Read this*, *Needs you*, *Your turn*), and the controls,
+     is typing_, _Read this_, _Needs you_, _Your turn_), the session's
+     pairing mode after them as its small icon and word in muted text,
+     and the controls,
      compact and quiet, as icons without fills: Pause/Resume, Interrupt, My
      turn, the speed, End. During the programmer's turn, Pause and Interrupt
      give way to Hand back, the one labeled control, since it's the main
      action then. The speed opens a menu of 0.4× to 3.0×. The agent's color
-     is on the dot only, never on the controls.
+     is on the dot only, never on the controls. In a narrow panel the
+     controls drop to a line of their own under the state, right-aligned,
+     rather than crowd it: the state keeps room for its words, and the
+     mode's word gives way (to "…") before the state's.
+     The words say what the wait is: while the agent thinks, the dot
+     breathes and a clock counts (_Agent is thinking · 8s_, and _no word from
+     it yet_ past a minute and a half), so a long think reads as work and a
+     stuck agent as stuck; while it plays, how many batches are written and
+     ready behind this one, and _writing more_ while the agent is at it.
+     After Interrupt the words are _Interrupted · it knows_ until the agent
+     visibly acts on it or the programmer speaks: a quiet agent that heard
+     must not read like one that didn't. While paused they say the work is
+     held, and the agent's reports say the same.
    - **The current message**, in large text (≈1.3× the editor font,
      *tunable*), high contrast. Its **top edge is fixed**, right under the
      header; its height grows downward with the message length. A new message
@@ -77,7 +91,24 @@ Layout, top to bottom:
 
 Without a session, the band has no header: it says there's no session and
 how to start one, and after a session, how it ended, with the agent's
-summary. In every message, code spans that name a file (`game.ts`,
+summary. The whole row under it is icons, so it fits on one line.
+Getting an agent going is one play button: it runs the chosen agent in
+a free terminal already standing in the workspace, or a new one there.
+Which agent that is changes rarely, so it's not in the panel; the
+command _AI Pair: Choose Agent to Start_ picks it (any of the set-up
+agents, or a custom command). Next to it, the session's **pairing
+mode**: one button showing the active mode's icon, opening a small
+menu here in the panel (like the speed menu). Bricks for _Build_ (get
+it done, shown as it goes), and for _Learn_ an eye (_Show me_), two
+people (_Together_), a pencil (_Let me try_): three splits of who does
+the work, each with a line saying what it means. It's picked per
+session before it starts and remembered between them; the agent is
+told at the start, and the mode's page rides with its guide. The panel never
+hosts an agent: each stays its own app, with its own screen, model and
+thinking settings, and Start treats them all the same (the panel's menus all
+open here: speed, mode; each shifts back inside when the panel is too narrow
+for where it hangs). The reply box sits below, once a session is running.
+In every message, code spans that name a file (`game.ts`,
 `src/server.ts`) open it, found by name if it isn't a path from the
 workspace's root, and URLs open in the browser. File and code references are
 mono and quietly underlined, taking the link color only on hover.
@@ -93,7 +124,7 @@ side bar's (the band's hairline marks it either way), and some themes set
 `descriptionForeground` to the foreground. High contrast themes get text at
 full strength and their contrast border in place of hairlines. The controls
 are the theme's too: icon buttons hover like its toolbar icons, and Run and
-Allow for session are its primary and secondary buttons, with their hover
+the two Allow buttons are its primary and secondary buttons, with their hover
 colors and borders. Their tooltips are the panel's own, in the theme's hover
 colors, shown after a moment's hover or on keyboard focus, since native
 tooltips show unreliably in a webview. The agent's colors are theme colors too (see Agent
@@ -115,12 +146,16 @@ Behavior:
   selection is sent once. *Ask the Agent About the Selection* in the editor's
   context menu focuses the reply box.
 - **Commands.** When the agent plays a `run`, the band shows the command under
-  the current message, with **Run**, **Allow for session** (the same command
-  won't ask again until the session ends) and **Skip** (unless
+  the current message, with **Run**, **Allow _program_** (every command of
+  that program, like `npm`, runs without asking until the session ends; shown
+  only for one plain command, since allowing the first program of a chained,
+  piped or redirected one would let the rest through), **Allow all** (every
+  command runs without asking until the session ends) and **Skip** (unless
   `aiPair.confirmCommands` is off), with the cursor in its read state and the
-  status *Needs you*. The
-  command then runs in an *AI Pair* terminal, revealed without taking focus,
-  and the history records its exit code.
+  status _Needs you: allow the command?_. Nothing plays until the programmer
+  answers, so the question can't be missed: the panel comes into view, the
+  command box pulses. The command then runs in an _AI Pair_ terminal,
+  revealed without taking focus, and the history records its exit code.
 - **Space pauses and resumes** while the panel has focus, except in the reply
   box. It never presses the focused button (after a click, that could be
   End); Enter still does.
@@ -173,8 +208,12 @@ the close typed before the cursor leaves it, and the pause after it.
 `type_fast` shortens both by the same factor as its typing. With nothing
 after the `▌`, the cursor is already in place and there's neither.
 
-**Reading.** After a `say`: `clamp(words × 270, 1500, 9000)`. Enough to read
-the message at an ordinary pace, about 220 words a minute.
+**Reading.** A beat's `say` gets
+`clamp(words × 270, 1500, 9000)`: enough to read it at an ordinary pace,
+about 220 words a minute. Its actions start a moment after the words show,
+and the beat lasts as long as the longer of the reading and the work, so a
+short line over a long edit adds no wait, and a long line over a small one
+still gets read.
 
 **Speed.** The panel's speed menu (0.4×, 0.6×, 1.0×, 1.5×, 2.0×, 3.0×) scales
 all of it together, immediately, even mid-typing. It's the `aiPair.speed`
