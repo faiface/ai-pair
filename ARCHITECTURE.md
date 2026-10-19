@@ -32,7 +32,10 @@ Status: **draft**.
 - **The VS Code adapter** is a thin layer over the VS Code API: apply edits with
   undo stops, report document changes, render decorations, scroll, save. It
   tells the agent's edits apart from the programmer's by tracking the document
-  versions its own edits produce.
+  versions its own edits produce. A change landing within 300 ms right where
+  its last edit ended, and not an undo or a save's, is another extension
+  answering its typing (auto-closing quotes, format on type): it undoes that
+  before its next edit, so it never reaches the core.
 - **The narration panel** is a webview. It talks to the extension via
   `postMessage`.
 

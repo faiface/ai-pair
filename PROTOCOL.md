@@ -563,7 +563,10 @@ edits near the agent cursor, may come later.)
   theirs. A change by others to a file the playing or queued batches edit
   interrupts, since they were planned against the text before it: a
   formatter when a batch saves, say. Changes by others to any other file
-  don't interrupt, and don't make `listen` return.
+  don't interrupt, and don't make `listen` return. Another extension's
+  answer to the agent's typing, like closing a `"""` the instant it's opened
+  or formatting a line as it's typed, isn't an edit at all: the extension
+  takes it back at once, so the file holds only what the agent typed.
 - `end`: the programmer ended the session. Playback stops and the session is
   over: this is its final report, and further calls fail with `no_session`.
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Other extensions no longer garble the agent's typing.** When an extension
+  answers a keystroke, like Pylance closing a `"""` the moment it opens, that
+  addition is taken back at once. Before, it doubled the quotes, counted as
+  your edit, and cut off the batch mid-sentence.
+
 ## 0.1.0
 
 The first release.

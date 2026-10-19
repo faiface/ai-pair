@@ -150,6 +150,26 @@ export async function run(): Promise<void> {
   await c.end()
   console.log(`interrupted after typing ${JSON.stringify(typed)}`)
 
+  // Another extension answering the agent's typing, the way Pylance closes a `"""`
+  // the moment it's opened: its addition is taken back, and the batch plays on as
+  // if it never happened.
+  const closer = vscode.workspace.onDidChangeTextDocument((e) => {
+    const text = e.document.getText()
+    if (!e.document.fileName.endsWith("doc.py") || e.contentChanges[0]?.text !== '"' || text !== '"""') return
+    const edit = new vscode.WorkspaceEdit()
+    edit.insert(e.document.uri, e.document.positionAt(text.length), '"""')
+    void vscode.workspace.applyEdit(edit)
+  })
+  await c.start("reaction test")
+  await c.step([{ move: { file: "doc.py", line: 1, to: "line_end" } }, { type: '"""A docstring."""▌' }])
+  const reacted = await c.step([])
+  closer.dispose()
+  assert.deepEqual(reacted.batches.map((b) => b.status), ["completed"])
+  assert.deepEqual(reacted.events, [])
+  assert.equal(await buffer("doc.py"), '"""A docstring."""')
+  await c.end()
+  console.log("another extension's reaction to the agent's typing is undone")
+
   // An agent connecting the way a harness does: the launcher, over stdio, from the project folder.
   await api.ready
   const transport = new StdioClientTransport({
