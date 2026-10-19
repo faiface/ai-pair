@@ -8,7 +8,7 @@ import { WebSocketServer, type WebSocket } from "ws"
 import {
   PROTOCOL_VERSION,
   ToolError,
-  type Action,
+  type Beat,
   type Discovery,
   type EditorMessage,
   type RelayMessage,
@@ -160,8 +160,8 @@ export class Bridge {
     }
     switch (tool) {
       case "step":
-        if (!Array.isArray(args.actions)) throw new ToolError("invalid_arguments", "`actions` must be an array.")
-        return c.step(args.actions as Action[], signal)
+        if (!Array.isArray(args.beats)) throw new ToolError("invalid_arguments", "`beats` must be an array.")
+        return c.step(args.beats as Beat[], signal)
       case "listen":
         return c.listen(signal)
       case "end":

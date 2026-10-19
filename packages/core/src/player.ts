@@ -1,16 +1,17 @@
 // Playing batches: what each action does, at a human pace. The same code plays a batch in the
 // programmer's editor and, to check it before it's queued, in memory (see rehearsal.ts).
 
-import type { Action, BatchResult, Candidate, Code, ErrorKind, RunResult, SpanTarget, Turn } from "@ai-pair/protocol"
+import type { Action, BatchResult, Beat, Candidate, Code, ErrorKind, RunResult, SpanTarget, Turn } from "@ai-pair/protocol"
 import * as nodePath from "node:path"
 import { actionKinds, CURSOR_MARKER, moveProblem, spanProblem, typeProblem } from "@ai-pair/protocol"
 import { resolveSpan, resolveSpot, spanCandidates, spotCandidates, type Resolution } from "./places"
 import type { Config } from "./controller"
 import type { LineIds, Sighting } from "./lines"
-import type { Change, EditorPort, Focus, PanelPort } from "./ports"
+import type { Change, EditorPort, Focus, KeysPort, PanelPort, VoicePort } from "./ports"
 import { fileLines, isLineStart, lineEnd, lineText, position } from "./text"
 import type { Pacing } from "./timeline"
-import { planTyping, readingTime } from "./typing"
+import type { Timing } from "./timing"
+import { planTyping, readingTime, wordCount } from "./typing"
 
 /** What playback reads and changes. */
 export type Scene = {
@@ -24,8 +25,21 @@ export type Scene = {
   focus: Focus
   /** The pointed code is in another file than the cursor, or far from it: looking back changes the view. */
   pointFar: boolean
-  /** Commands the programmer allowed to run without asking, until the session ends. */
-  allowedCommands: Set<string>
+  /** Commands the programmer allowed to run without asking, until the session ends: every one, or by program. */
+  allowed: { all: boolean; programs: Set<string> }
+}
+
+/**
+ * The program a command runs, which the programmer can allow for the session: its first word,
+ * when it's one plain command. Anything a shell reads as more — chained or piped commands,
+ * redirects, substitutions, or a variable set in front — has none, since allowing its first
+ * program would let through whatever else it runs.
+ */
+export function programOf(command: string): string | undefined {
+  const trimmed = command.trim()
+  if (/[;&|<>`$(){}\n]/.test(trimmed)) return undefined
+  const first = trimmed.split(/\s+/)[0]
+  return first && !first.includes("=") ? first : undefined
 }
 
 /** Where actions take effect: the programmer's editor, or a copy of it in memory. */
@@ -39,6 +53,10 @@ export type Stage = {
   render(): void
   /** Waits for the programmer to allow or decline a command. */
   confirm(id: number, command: string): Promise<boolean>
+  /** The voice to speak a `say` with, when one is on and ready. Rehearsals have none: they are silent. */
+  voice?(): VoicePort | undefined
+  /** The key sounds to tell of each keystroke, when they are on. Rehearsals have none: they are silent. */
+  keys?(): KeysPort | undefined
   /** The identities of the lines of the files played in. */
   lines: LineIds
   /**
@@ -127,6 +145,46 @@ export function transformScene(s: Scene, file: string, change: Change): void {
   if (s.point?.file === file) s.point = { file, start: map(s.point.start), end: map(s.point.end) }
 }
 
+/**
+ * About how long a beat's actions take to play, in normal-speed milliseconds: the span its `say`
+ * is spread across. A `run` counts as no time — how long a command takes is anyone's guess, and
+ * speech rides over it either way.
+ */
+export function coverage(actions: Action[], timing: Timing): number {
+  let ms = 0
+  for (const action of actions) {
+    if ("type" in action || "type_fast" in action) {
+      const fast = "type_fast" in action
+      const text: unknown = fast ? action.type_fast : action.type
+      if (typeof text !== "string") continue
+      const scale = fast ? timing.fastFactor : 1
+      const chunks = planTyping(text.replace(CURSOR_MARKER, ""), timing.type, false, () => 0.5, scale)
+      for (const chunk of chunks) ms += chunk.delay
+      if (text.includes(CURSOR_MARKER) && !text.endsWith(CURSOR_MARKER)) ms += (timing.beforeMoveMs + timing.afterMoveNearMs) * scale
+    } else if ("move" in action) ms += timing.beforeMoveMs + timing.afterMoveNearMs
+    else if ("select" in action) ms += timing.beforeSelectMs + timing.afterSelectMs
+    else if ("delete" in action) ms += timing.afterDeleteMs
+    else if ("point" in action) ms += timing.afterPointMs
+  }
+  return ms
+}
+
+/** Each `say` of a batch with the span of work it covers, its beat's actions, in normal-speed milliseconds. */
+export function sayPlans(beats: Beat[], timing: Timing): Array<{ say: string; spanMs: number }> {
+  return beats.flatMap((beat) => (typeof beat.say === "string" ? [{ say: beat.say, spanMs: coverage(beat.do ?? [], timing) }] : []))
+}
+
+/** What's left of a beat that was cut short: its actions still to do, as a beat of its own, if any. */
+function remainder(actions: Action[]): Beat[] {
+  return actions.length > 0 ? [{ do: actions }] : []
+}
+
+/**
+ * A beat's words, under way. Spoken: done when `spoken` settles, and not waited on past `until`, a
+ * clock time. Read: `leftMs` more of reading time once the beat's work is done.
+ */
+type Speech = { spoken: Promise<void>; until: number } | { leftMs: number }
+
 export class Player {
   /** In a reading pause, or waiting for the programmer to allow a command. */
   reading = false
@@ -140,12 +198,12 @@ export class Player {
   ) {}
 
   /** Plays a batch, saves the files it edited, and says how it went, and which lines that shows. */
-  async play(id: number, actions: Action[]): Promise<{ result: BatchResult; sightings: Sighting[] }> {
+  async play(id: number, beats: Beat[]): Promise<{ result: BatchResult; sightings: Sighting[] }> {
     const playing: Playing = { touched: new Set(), runs: [], sightings: [], edited: false, moved: false }
     this.playing = playing
     let result: BatchResult
     try {
-      result = await this.actions(id, actions, playing)
+      result = await this.beats(id, beats, playing)
     } finally {
       this.playing = undefined
     }
@@ -212,38 +270,144 @@ export class Player {
     if (span?.file === file) this.playing!.span = { file, start: map(span.start), end: map(span.end) }
   }
 
-  private async actions(id: number, actions: Action[], playing: Playing): Promise<BatchResult> {
-    for (let i = 0; i < actions.length; i++) {
-      if (this.stage.pacing.isInterrupted) return this.stopped(id, actions.slice(i), i > 0)
-      let outcome: Outcome
-      try {
-        outcome = await this.perform(actions[i]!, playing)
-      } catch (e) {
-        outcome = fail("invalid_action", e instanceof Error ? e.message : String(e))
+  /**
+   * Plays beats in order. A beat's `say` starts first and is spread over its actions; the next beat
+   * starts once both are done, so words and the work they're about stay together.
+   */
+  private async beats(id: number, beats: Beat[], playing: Playing): Promise<BatchResult> {
+    for (let i = 0; i < beats.length; i++) {
+      if (this.stage.pacing.isInterrupted) return this.stopped(id, beats.slice(i), i > 0)
+      const beat = beats[i]!
+      const actions = beat.do ?? []
+      const later = beats.slice(i + 1)
+      let speech: Speech | undefined
+      if (typeof beat.say === "string") {
+        speech = await this.say(beat.say, actions)
+        if (!speech) return this.stopped(id, beats.slice(i), i > 0)
       }
-      const rest = actions.slice(i + 1)
-      if (outcome.kind === "interrupted") {
-        if (outcome.consumed) return this.stopped(id, rest, true)
-        if (outcome.rest) return this.stopped(id, [outcome.rest, ...rest], true)
-        return this.stopped(id, actions.slice(i), i > 0)
+      // Once its words were heard, a beat cut short leaves only its actions still to do.
+      const effect = i > 0 || speech !== undefined
+      for (let j = 0; j < actions.length; j++) {
+        if (this.stage.pacing.isInterrupted) return this.stopped(id, [...remainder(actions.slice(j)), ...later], effect || j > 0)
+        let outcome: Outcome
+        try {
+          outcome = await this.perform(actions[j]!, playing)
+        } catch (e) {
+          outcome = fail("invalid_action", e instanceof Error ? e.message : String(e))
+        }
+        const rest = actions.slice(j + 1)
+        if (outcome.kind === "interrupted") {
+          if (outcome.consumed) return this.stopped(id, [...remainder(rest), ...later], true)
+          if (outcome.rest) return this.stopped(id, [...remainder([outcome.rest, ...rest]), ...later], true)
+          return this.stopped(id, [...remainder(actions.slice(j)), ...later], effect || j > 0)
+        }
+        if (outcome.kind === "error") {
+          if (outcome.sighting) playing.sightings.push(outcome.sighting)
+          const result: BatchResult = { id, status: "failed", error: { kind: outcome.error, message: outcome.message } }
+          if (outcome.candidates) result.error!.candidates = outcome.candidates
+          const unplayed = [...remainder(outcome.consumed ? rest : actions.slice(j)), ...later]
+          if (unplayed.length > 0) result.unplayed = unplayed
+          return result
+        }
       }
-      if (outcome.kind === "error") {
-        if (outcome.sighting) playing.sightings.push(outcome.sighting)
-        const result: BatchResult = { id, status: "failed", error: { kind: outcome.error, message: outcome.message } }
-        if (outcome.candidates) result.error!.candidates = outcome.candidates
-        const unplayed = outcome.consumed ? rest : actions.slice(i)
-        if (unplayed.length > 0) result.unplayed = unplayed
-        return result
-      }
+      if (speech && !(await this.hearOut(speech))) return this.stopped(id, later, true)
     }
     return { id, status: "completed" }
   }
 
   /** An interrupted batch. With no visible effect yet, it counts as discarded. */
-  private stopped(id: number, unplayed: Action[], effect: boolean): BatchResult {
+  private stopped(id: number, unplayed: Beat[], effect: boolean): BatchResult {
     const result: BatchResult = { id, status: effect ? "interrupted" : "discarded" }
     if (unplayed.length > 0) result.unplayed = unplayed
     return result
+  }
+
+  /**
+   * Starts a beat's words, over its `actions`: shown, and spoken when the voice is on. Resolves once
+   * the actions may begin, or to nothing when interrupted before the words were heard.
+   */
+  private async say(text: string, actions: Action[]): Promise<Speech | undefined> {
+    const { panel } = this.stage
+    const timing = this.stage.config().timing
+    const spanMs = coverage(actions, timing) / this.stage.speed()
+    panel.post({ type: "say", text })
+    this.reading = true
+    const voice = this.stage.voice?.()
+    if (!voice) {
+      // Read while the work plays: a moment to look at the words first, then the beat lasts as
+      // long as the longer of the reading and the work. Counted in paced time, so pausing holds both.
+      const ms = readingTime(text, timing.reading) / this.stage.speed()
+      panel.post({ type: "reading", ms })
+      this.stage.render()
+      // Interrupted meanwhile, the words were still shown: the loop over the actions stops at once.
+      const lead = actions.length > 0 ? Math.min(timing.voice.leadMs, ms) : 0
+      if (lead > 0) await this.stage.pacing.sleep(lead)
+      if (actions.length > 0) {
+        this.reading = false
+        this.stage.render()
+      }
+      return { leftMs: ms - lead - spanMs }
+    }
+    const speechMs = wordCount(text) * timing.voice.msPerWord
+    panel.post({ type: "reading", ms: speechMs })
+    this.stage.render()
+    let heard!: () => void
+    const sounding = new Promise<void>((resolve) => (heard = resolve))
+    const spoken = voice.speak(text, spanMs, heard).catch(() => {})
+    // Making speech takes a moment, more for a heavier model or behind words still queued: the
+    // actions wait until these words are actually heard, so the hands never run ahead of them.
+    // A voice that stays silent too long is let go, so it can't stall the session.
+    let giveUp!: () => void
+    const patience = new Promise<void>((resolve) => (giveUp = resolve))
+    const timer = setTimeout(giveUp, timing.voice.maxStartMs)
+    await Promise.race([sounding, spoken, patience])
+    clearTimeout(timer)
+    if (this.stage.pacing.isInterrupted) {
+      this.reading = false
+      return undefined
+    }
+    // Heard out, but not waited on forever: a voice that goes quiet without ending is let go after
+    // about twice the line's length.
+    const speech: Speech = { spoken, until: Date.now() + 2 * speechMs + timing.voice.maxStartMs }
+    if (actions.length > 0) {
+      // Duplex: let the voice get ahead by however much it outruns the work it covers (capped),
+      // then work under it, so talking and working end about together.
+      const lead = Math.min(Math.max(timing.voice.leadMs, speechMs - spanMs), timing.voice.maxLeadMs)
+      await this.stage.pacing.sleep(lead)
+      this.reading = false
+      this.stage.render()
+    }
+    return speech
+  }
+
+  /**
+   * Waits for a beat's words to end, so the next beat starts after them: the view never leaves
+   * code while words about it are still sounding. False when interrupted meanwhile.
+   */
+  private async hearOut(speech: Speech): Promise<boolean> {
+    if ("leftMs" in speech) {
+      if (speech.leftMs > 0) {
+        this.reading = true
+        this.stage.render()
+        await this.stage.pacing.sleep(speech.leftMs)
+      }
+    } else {
+      const left = speech.until - Date.now()
+      if (left > 0) {
+        this.reading = true
+        this.stage.render()
+        // Not a paced sleep: stopping the voice, as an interruption does, settles `spoken`.
+        let letGo!: () => void
+        const limit = setTimeout(() => letGo(), left)
+        await Promise.race([speech.spoken, new Promise<void>((resolve) => (letGo = resolve))])
+        clearTimeout(limit)
+      }
+    }
+    if (this.reading) {
+      this.reading = false
+      this.stage.render()
+    }
+    return !this.stage.pacing.isInterrupted
   }
 
   /** Shows a change to the cursor, or to what the view follows, and keeps it in the programmer's view. */
@@ -266,13 +430,13 @@ export class Player {
     }
     const named = this.names(action, playing)
     if (typeof named === "object") return named
-    if (s.turn === "user" && !("say" in action) && !("point" in action)) {
-      return fail("not_your_turn", "During the programmer's turn, only `say` and `point` are allowed.")
+    if (s.turn === "user" && !("point" in action)) {
+      return fail("not_your_turn", "During the programmer's turn, beats may only talk and `point`.")
     }
 
     // An action at the cursor brings the view back to it from the code last pointed at. A far jump
     // back gets a far move's pause, before anything happens there; one to another file has its own.
-    const cursorAction = !("say" in action) && !("point" in action) && !("run" in action)
+    const cursorAction = !("point" in action) && !("run" in action)
     const lookingBack = cursorAction && s.focus === "point"
     const farBack = lookingBack && s.pointFar
     if (lookingBack) {
@@ -283,18 +447,6 @@ export class Player {
         if (!(await this.delay(timing.afterMoveFarMs))) return { kind: "interrupted" }
       }
       this.follow()
-    }
-
-    if ("say" in action) {
-      panel.post({ type: "say", text: action.say })
-      const ms = readingTime(action.say, timing.reading) / this.stage.speed()
-      this.reading = true
-      panel.post({ type: "reading", ms })
-      this.stage.render()
-      await this.stage.pacing.sleep(ms)
-      this.reading = false
-      this.stage.render()
-      return ok
     }
 
     if ("move" in action) {
@@ -369,6 +521,7 @@ export class Player {
       s.selection = null
       this.touch(playing, file, start, end - start, 0)
       await this.edit(file, { offset: start, deleteLength: end - start, text: "" }, { undoStopBefore: true, undoStopAfter: true })
+      this.stage.keys?.()?.press("\b")
       this.follow()
       await this.delay(timing.afterDeleteMs)
       return ok
@@ -421,8 +574,10 @@ export class Player {
     const id = nextRunId++
     const signal = this.stage.pacing.signal
 
-    if (config.confirmCommands && !s.allowedCommands.has(command)) {
-      panel.post({ type: "run", id, command, phase: "confirm" })
+    const program = programOf(command)
+    const allowed = s.allowed.all || (program !== undefined && s.allowed.programs.has(program))
+    if (config.confirmCommands && !allowed) {
+      panel.post({ type: "run", id, command, phase: "confirm", ...(program !== undefined ? { program } : {}) })
       this.reading = true
       this.stage.render()
       const go = await this.stage.confirm(id, command)
@@ -519,6 +674,8 @@ export class Player {
         undoStopBefore: i === 0,
         undoStopAfter: i === chunks.length - 1,
       })
+      // An empty chunk only clears the selection: a deletion.
+      this.stage.keys?.()?.press(chunk.text || "\b")
       typed += chunk.text
       this.follow()
     }

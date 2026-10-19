@@ -39,6 +39,55 @@ async function setUpTwice(id: string, ...parts: string[]): Promise<string> {
   return once
 }
 
+describe("OMP", () => {
+  it("creates ~/.omp/agent/mcp.json, on, with no MCP timeout", async () => {
+    const json = JSON.parse(await setUpTwice("omp", ".omp", "agent", "mcp.json"))
+    expect(json.$schema).toContain("mcp-schema.json")
+    expect(json.mcpServers.pair).toEqual({ type: "stdio", command: LAUNCHER, args: [], enabled: true, timeout: 0 })
+  })
+
+  it("turns a switched-off pair back on, keeping the rest", async () => {
+    put(
+      JSON.stringify(
+        {
+          enabledServers: ["other"],
+          disabledServers: ["pair", "noisy"],
+          mcpServers: { other: { command: "x" }, pair: { command: LAUNCHER, args: [], enabled: false } },
+        },
+        null,
+        2,
+      ),
+      ".omp",
+      "agent",
+      "mcp.json",
+    )
+    const json = JSON.parse(await setUpTwice("omp", ".omp", "agent", "mcp.json"))
+    expect(json.mcpServers.other).toEqual({ command: "x" })
+    expect(json.mcpServers.pair.enabled).toBe(true)
+    expect(json.disabledServers).toEqual(["noisy"])
+    expect(json.enabledServers).toEqual(["other"])
+  })
+
+  it("isn't set up while pair has a timeout or sits on the denylist", async () => {
+    put(JSON.stringify({ mcpServers: { pair: { command: LAUNCHER, args: [], enabled: true } } }), ".omp", "agent", "mcp.json")
+    expect(agent("omp").isSetUp(host, LAUNCHER)).toBe(false)
+    put(
+      JSON.stringify({ disabledServers: ["pair"], mcpServers: { pair: { command: LAUNCHER, args: [], enabled: true, timeout: 0 } } }),
+      ".omp",
+      "agent",
+      "mcp.json",
+    )
+    expect(agent("omp").isSetUp(host, LAUNCHER)).toBe(false)
+  })
+
+  it("writes to a named profile's agent folder", async () => {
+    host.env.OMP_PROFILE = "work"
+    await agent("omp").setUp(host, LAUNCHER)
+    expect(read(".omp", "profiles", "work", "agent", "mcp.json")).toContain(LAUNCHER)
+    expect(agent("omp").isSetUp(host, LAUNCHER)).toBe(true)
+  })
+})
+
 describe("Claude Code", () => {
   it("runs its CLI when it's installed, replacing an old entry", async () => {
     const cli = file(".local", "bin", process.platform === "win32" ? "claude.exe" : "claude")
