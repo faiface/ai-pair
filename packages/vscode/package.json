@@ -60,6 +60,35 @@
         "category": "AI Pair"
       },
       {
+        "command": "aiPair.startAgent",
+        "title": "Start Agent",
+        "category": "AI Pair",
+        "icon": "$(play)"
+      },
+      {
+        "command": "aiPair.pickStartAgent",
+        "title": "Choose Agent to Start",
+        "category": "AI Pair",
+        "icon": "$(chevron-down)"
+      },
+      {
+        "command": "aiPair.pickMode",
+        "title": "Choose Pairing Mode",
+        "category": "AI Pair",
+        "icon": "$(book)"
+      },
+      {
+        "command": "aiPair.toggleVoice",
+        "title": "Toggle Voice",
+        "category": "AI Pair",
+        "icon": "$(unmute)"
+      },
+      {
+        "command": "aiPair.selectVoice",
+        "title": "Select Voice",
+        "category": "AI Pair"
+      },
+      {
         "command": "aiPair.playDemo",
         "title": "Play Demo Session",
         "category": "AI Pair"
@@ -118,7 +147,7 @@
           "default": 1,
           "minimum": 0.25,
           "maximum": 4,
-          "description": "Overall playback speed: typing, pauses, and reading time. The panel's speed menu offers 0.4× to 3×."
+          "description": "Overall playback speed: typing, pauses, and reading time, and the voice's pace up to 2× (slower than 1×, the voice keeps its own pace and pauses more). The panel's speed menu offers 0.4× to 3×."
         },
         "aiPair.agentName": {
           "type": "string",
@@ -134,7 +163,55 @@
           "type": "boolean",
           "default": true,
           "scope": "application",
-          "markdownDescription": "Ask in the Pair panel before running each command the agent plays in the terminal (`run`). Turning this off lets the agent run commands without Claude Code's own permission prompt."
+          "markdownDescription": "Ask in the Pair panel before running each command the agent plays in the terminal (`run`). Turning this off lets the agent run commands without its own permission prompt."
+        },
+        "aiPair.workAheadBatches": {
+          "type": "integer",
+          "default": 2,
+          "minimum": 0,
+          "maximum": 10,
+          "markdownDescription": "How many batches the agent may write ahead of what you're watching. It then plays without pausing to think between batches. When you step in, what it wrote ahead is dropped, so more means more thrown away. `0` makes it wait for each batch to finish."
+        },
+        "aiPair.voice.enabled": {
+          "type": "boolean",
+          "default": false,
+          "scope": "application",
+          "markdownDescription": "Hear the agent instead of reading it: each thing it says is spoken on this machine, by the speech model in `aiPair.voice.model`. The words still land in the panel's history. The words are spread over the typing they explain, so talking and typing run together."
+        },
+        "aiPair.voice.model": {
+          "type": "string",
+          "default": "kokoro",
+          "enum": ["kokoro", "chatterbox"],
+          "enumDescriptions": [
+            "Kokoro, a light local speech model. Works everywhere; the first turn-on downloads it into the extension's storage, about 100 MB of model in a few hundred MB of runtime.",
+            "Chatterbox Turbo by Resemble AI: more natural, run by uv. On an Apple Silicon Mac it uses the GPU; elsewhere it wants an NVIDIA card to keep up, and the first turn-on fetches a few GB (about 1.3 GB on a Mac)."
+          ],
+          "markdownDescription": "Which speech model talks. The panel's Pick a voice changes it."
+        },
+        "aiPair.voice.voice": {
+          "type": "string",
+          "default": "af_heart",
+          "enum": ["af_heart", "af_bella", "af_nicole", "af_aoede", "af_kore", "af_sarah", "am_michael", "am_fenrir", "am_puck", "bf_emma", "bm_george", "bm_fable"],
+          "description": "Whose Kokoro voice the agent speaks with. The panel's Pick a voice changes it."
+        },
+        "aiPair.voice.chatterboxVoice": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "A recording Chatterbox speaks like: 10 seconds or more of one person speaking clearly, who agreed to be copied. Empty is Chatterbox's own voice. The panel's Pick a voice changes it."
+        },
+        "aiPair.voice.rate": {
+          "type": "number",
+          "default": 1,
+          "minimum": 0.5,
+          "maximum": 2,
+          "description": "How fast the voice talks, on top of the playback speed: 1 is its own pace."
+        },
+        "aiPair.voice.runtimePath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Path to a bun or node program to run the voice process with (VS Code's own runtime cannot load the speech engine). Empty finds bun, then node, in the usual places."
         }
       }
     },

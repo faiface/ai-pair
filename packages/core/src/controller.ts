@@ -1,12 +1,12 @@
 // The protocol state machine: sessions, the batch queue, and reports. Playing a batch is player.ts.
 // See PROTOCOL.md for the rules implemented here.
 
-import type { Action, BatchResult, Event, Excerpt, FileContent, Report, Turn } from "@ai-pair/protocol"
-import { actionKinds, CURSOR_MARKER, ToolError } from "@ai-pair/protocol"
+import type { Beat, BatchResult, Event, Excerpt, FileContent, Report, RunResult, Turn } from "@ai-pair/protocol"
+import { CURSOR_MARKER, ToolError } from "@ai-pair/protocol"
 import { fileDiff } from "./diff"
 import { LineIds, type Sighting } from "./lines"
-import { agentPath, displayPath, Player, type Scene } from "./player"
-import type { AgentState, Change, CursorView, EditorPort, PanelPort, Ref, SharedSelection } from "./ports"
+import { agentPath, displayPath, Player, programOf, sayPlans, type Scene } from "./player"
+import type { AgentState, Change, CursorView, EditorPort, PanelPort, Ref, SharedSelection, VoicePort } from "./ports"
 import { followChange, rehearse, type Rehearsal } from "./rehearsal"
 import { fileLines } from "./text"
 import { Timeline } from "./timeline"
@@ -16,6 +16,11 @@ export type Config = {
   maxBlockMs: number
   /** During the programmer's turn, how long after their last edit `listen` returns. */
   navigatorIdleMs: number
+  /**
+   * How far ahead of playback the agent may work: `step` returns at once while fewer than this
+   * many batches wait in front of the new one, not yet playing. 0 waits for each batch.
+   */
+  workAheadBatches: number
   timing: Timing
   random: () => number
   /** Ask the programmer before each `run`. */
@@ -28,6 +33,7 @@ export type Config = {
 export const defaultConfig: Config = {
   maxBlockMs: 45_000,
   navigatorIdleMs: 3000,
+  workAheadBatches: 2,
   timing: defaultTiming,
   random: Math.random,
   confirmCommands: true,
@@ -35,9 +41,69 @@ export const defaultConfig: Config = {
   maxRunWaitMs: 600_000,
 }
 
+/** What the voice asks when a `run` waits for the programmer's go-ahead. */
+const CONFIRM_ASK = "Okay to run it? Allow it in the panel."
+
+/**
+ * How long the editor may sit still between batches, while the agent writes the next, before the
+ * agent is told: a beat is natural, longer reads to the programmer as the session being stuck.
+ */
+const STILL_NOTE_MS = 5000
+
+/** What the agent last heard that it now has to answer: it picks the words the voice fills its thinking with. */
+type News = "ran" | "failed" | "message" | "interrupted" | "drained"
+
+/**
+ * Said by the voice, not the agent, when the agent goes quiet to think: a person at the desk
+ * would make a sound, not sit in silence. Fitted to what it's answering, and short, so they never
+ * hold back the agent's own words for long. A run's result was read out already, so after one
+ * they're about thinking it over, not about looking. `long`: still thinking, a while later.
+ */
+const FILLERS: Record<News | "long", string[]> = {
+  ran: ["Okay, let me think about that.", "Alright. One moment.", "Mm. Let me see."],
+  failed: ["Let me look at why.", "Hmm. Let me see what went wrong.", "Okay, let me find the cause."],
+  message: ["Okay, one moment.", "Mm, let me think.", "Alright, give me a second."],
+  interrupted: ["Okay, let me rethink this.", "Sure. Give me a moment.", "Got it. Let me rework that."],
+  drained: ["One sec.", "Just a moment.", "Let me think about the next bit."],
+  long: ["Still working it out.", "Bear with me, almost there.", "Still thinking this one through."],
+}
+/**
+ * How long the agent may think in silence before the voice fills it. After a run, its read-out
+ * fills the first seconds; when the editor ran out of written batches, a beat is the agent's to take.
+ */
+const FILL_FIRST_MS: Record<News, number> = { ran: 6000, failed: 6000, message: 3000, interrupted: 3000, drained: STILL_NOTE_MS }
+/** And again after that, at most. */
+const FILL_AGAIN_MS = 15_000
+const MAX_FILLS = 2
+
+/** Longer than this, a line of output is read out by its length, not word by word. */
+const READ_OUT_CHARS = 100
+
+/**
+ * A run's result in words, as a person reads it off the screen: a short output whole, a long one
+ * by its length and last line (where a summary or the error is), a failure by its last line. Text a
+ * voice can't say — paths, hashes, a wall of symbols — is counted, not read.
+ */
+function readOut(run: RunResult): string {
+  // Banners like `==== 3 passed ====` are decoration: only the words between are said. A lone
+  // sign, as in `-1`, is the number's.
+  const lines = run.output
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*([=\-*#~_])\1{2,}|([=\-*#~_])\2{2,}\s*$/g, "").trim())
+    .filter((line) => line !== "")
+  const sayable = (text: string) => text.length <= READ_OUT_CHARS && !/\S{25,}/.test(text)
+  const end = (text: string) => (/[.!?]$/.test(text) ? text : `${text}.`)
+  const last = lines.at(-1)
+  if (run.exit_code !== 0) return last && sayable(last) ? `It failed: ${end(last)}` : `It failed, with exit code ${run.exit_code}.`
+  if (!last) return "It ran, with no output."
+  if (lines.length <= 3 && sayable(lines.join(", "))) return `It printed ${end(lines.join(", "))}`
+  const count = lines.length === 1 ? "a long line" : `${lines.length} lines`
+  return sayable(last) && lines.length > 1 ? `It printed ${count}, ending with ${end(last)}` : `It printed ${count}.`
+}
+
 type Batch = {
   id: number
-  actions: Action[]
+  beats: Beat[]
   state: "queued" | "playing" | "done"
   result?: BatchResult
   /** What it leaves behind, played in memory when it was queued: where the next batch is rehearsed from. */
@@ -83,6 +149,21 @@ type Session = {
   lines: LineIds
   /** For each file, the line the agent was last shown at each number, by its identity. */
   seen: Map<string, Map<number, number>>
+  /** When the queue ran dry while the agent was off writing, not waiting: the editor is still until its next batch. */
+  stillSince?: number
+  /** How long the editor sat still before the batch just submitted, to tell the agent. */
+  stillMs?: number
+  /** The voice as the agent was last told of it: whether it's on. */
+  toldVoice?: boolean
+  /** What the agent was last given to answer, or is writing ahead of; none for a quiet heartbeat. */
+  news?: News
+  /** The voice's fillers in this stretch of the agent thinking: how many so far, and the next. */
+  fills: number
+  fillTimer?: NodeJS.Timeout
+  /** Takes back a filler not yet heard, once the agent has its own words. */
+  takeBackFill?: () => void
+  /** The filler said last, so the next one is a different one. */
+  lastFill?: string
 }
 
 type Call = {
@@ -103,6 +184,9 @@ export class Controller {
   private nextBatchId = 1
   private pauseReasons = new Set<string>()
   private speed = 1
+  /** The mode the next session runs in; fixed for a session once it starts. */
+  private mode: { kind: "build" | "learn"; drive?: "show" | "together" | "try" } = { kind: "build" }
+  private voice: VoicePort | undefined
   private lastPosted = ""
 
   constructor(
@@ -127,7 +211,7 @@ export class Controller {
         point: null,
         focus: "cursor",
         pointFar: false,
-        allowedCommands: new Set(),
+        allowed: { all: false, programs: new Set() },
       }
       const timeline = new Timeline(this.pauseReasons.size > 0)
       const lines = LineIds.editor()
@@ -142,6 +226,7 @@ export class Controller {
           speed: () => this.speed,
           render: () => this.render(),
           confirm: (id, command) => this.confirm(s, id, command),
+          voice: () => (this.voice?.ready ? this.voice : undefined),
           lines,
         }),
         queue: [],
@@ -156,28 +241,37 @@ export class Controller {
         navigatorReady: false,
         lines,
         seen: new Map(),
+        fills: 0,
       }
       this.session = s
       this.lastPosted = ""
       this.panel.post({ type: "session", active: true, task })
       this.render()
-      return { batches: [], events: [], turn: scene.turn }
+      // The agent writes its words for the ear or the eye, so it's told from the start which it is.
+      // The mode is told the same way: it governs how the whole session pairs.
+      s.toldVoice = this.voice?.enabled === true
+      return { batches: [], events: [], turn: scene.turn, voice: s.toldVoice ? "on" : "off", mode: this.mode.kind, ...(this.mode.drive ? { drive: this.mode.drive } : {}) }
     })
   }
 
-  step(actions: Action[], signal?: AbortSignal): Promise<Report> {
+  step(beats: Beat[], signal?: AbortSignal): Promise<Report> {
     return this.serialize(signal, async () => {
       const s = this.requireSession()
       // An empty batch only waits for the queued ones, so it isn't a batch of its own.
-      if (actions.length === 0) return this.block("step", {}, signal)
+      if (beats.length === 0) return this.block("step", {}, signal)
       // Played in memory first, so what would fail is reported now, not when the batch plays.
-      const rehearsal = s.stale || s.ended ? undefined : await this.rehearse(s, actions)
+      const rehearsal = s.stale || s.ended ? undefined : await this.rehearse(s, beats)
       // An interruption arriving meanwhile discards it, like any batch planned without knowing about it.
       const current = rehearsal && !s.stale && !s.ended
-      if (current && rehearsal.result.status === "failed") return this.reject(s, actions, rehearsal)
-      const batch: Batch = { id: this.nextBatchId++, actions, state: "queued", after: rehearsal?.after }
+      if (current && rehearsal.result.status === "failed") return this.reject(s, beats, rehearsal)
+      const batch: Batch = { id: this.nextBatchId++, beats, state: "queued", after: rehearsal?.after }
       if (current) {
         s.queue.push(batch)
+        if (s.stillSince !== undefined && Date.now() - s.stillSince >= STILL_NOTE_MS) s.stillMs = Date.now() - s.stillSince
+        s.stillSince = undefined
+        // Its words are made now, while the batches before it play, so it starts talking at once.
+        const voice = this.voice?.ready ? this.voice : undefined
+        if (voice) for (const { say, spanMs } of sayPlans(beats, this.config.timing)) voice.prepare(say, spanMs / this.speed)
         this.kick(s)
       } else {
         this.discard(s, batch)
@@ -188,7 +282,9 @@ export class Controller {
 
   listen(signal?: AbortSignal): Promise<Report> {
     return this.serialize(signal, () => {
-      this.requireSession()
+      const s = this.requireSession()
+      // Waiting on the programmer on purpose: the editor's stillness from here on isn't the agent's.
+      s.stillSince = undefined
       return this.block("listen", {}, signal)
     })
   }
@@ -368,9 +464,13 @@ export class Controller {
   }
 
   pause(reason = "user"): void {
+    const was = this.pauseReasons.size
     this.pauseReasons.add(reason)
     this.session?.timeline.pause()
     this.render()
+    // The programmer's own Pause is told to a waiting agent at once — its report says paused —
+    // instead of leaving it to wonder at the next heartbeat why nothing is playing.
+    if (was === 0 && reason === "user") this.wakeWaiting()
   }
 
   /** Removes one pause reason, or all of them. Playback continues when none are left. */
@@ -385,33 +485,64 @@ export class Controller {
       s.timeline.resume()
     }
     this.render()
+    // And a waiting agent hears at once that things move again.
+    this.wakeWaiting()
+  }
+
+  /** Answers a waiting `step` or `listen` now, with the report as it stands. Never an `end`. */
+  private wakeWaiting(): void {
+    if (this.call && this.call.kind !== "end") this.finishCall(false)
   }
 
   setSpeed(speed: number): void {
     this.speed = speed
   }
 
+  /** How the next session pairs: build it, or learn it (with who does the work). A session that's
+   *  already running keeps the mode it started in. */
+  setMode(kind: "build" | "learn", drive?: "show" | "together" | "try"): void {
+    this.mode = { kind, ...(kind === "learn" ? { drive: drive ?? "show" } : {}) }
+  }
+
+  /** The voice that speaks each `say`, or none. Changing it cuts off anything being said. */
+  setVoice(voice: VoicePort | undefined): void {
+    if (this.voice !== voice) this.voice?.stop()
+    this.voice = voice
+  }
+
   setConfirmCommands(confirm: boolean): void {
     this.config = { ...this.config, confirmCommands: confirm }
   }
 
+  /** How far ahead of playback the agent may work, in batches waiting to play; 0 waits for each batch. */
+  setWorkAhead(batches: number): void {
+    this.config = { ...this.config, workAheadBatches: Math.max(0, Math.round(batches)) }
+    this.update()
+  }
+
   /**
-   * The programmer's answer to a `run` waiting for confirmation. `remember`: run exactly this
-   * command without asking for the rest of the session.
+   * The programmer's answer to a `run` waiting for confirmation. `allow`: for the rest of the
+   * session, run without asking every command of this one's program, or every command.
    */
-  decideRun(id: number, run: boolean, remember = false): void {
+  decideRun(id: number, run: boolean, allow?: "program" | "all"): void {
     const s = this.session
     const c = s?.confirming
     if (c?.id !== id) return
-    if (run && remember) s!.scene.allowedCommands.add(c.command)
+    const program = programOf(c.command)
+    if (run && allow === "all") s!.scene.allowed.all = true
+    else if (run && allow === "program" && program !== undefined) s!.scene.allowed.programs.add(program)
     c.decide(run)
   }
 
   /** Waits for the programmer's answer to a `run`, or an interruption. */
   private confirm(s: Session, id: number, command: string): Promise<boolean> {
     const signal = s.timeline.signal
+    // Once they've answered, asking is stale: words still queued or sounding are taken back.
+    const asked = new AbortController()
     return new Promise<boolean>((resolve) => {
       const abort = () => resolve(false)
+      // Said, not only shown: the programmer's eyes are on the code, and nothing plays until they answer.
+      if (this.voice?.ready) void this.voice.speak(CONFIRM_ASK, undefined, undefined, asked.signal)
       s.confirming = {
         id,
         command,
@@ -422,6 +553,7 @@ export class Controller {
       }
       signal.addEventListener("abort", abort, { once: true })
     }).finally(() => {
+      asked.abort()
       s.confirming = undefined
     })
   }
@@ -454,16 +586,21 @@ export class Controller {
   }
 
   /** Plays a batch in memory, from where the queued batches leave off, or the editor as it is. */
-  private rehearse(s: Session, actions: Action[]): ReturnType<typeof rehearse> {
+  private rehearse(s: Session, beats: Beat[]): ReturnType<typeof rehearse> {
     const from = s.queue.at(-1)?.after ?? { scene: s.scene, texts: new Map(), lines: s.lines, edits: new Set<string>() }
-    return rehearse(this.editor, this.config, from, actions, (file, line, id) => s.seen.get(file)?.get(line) === id)
+    return rehearse(this.editor, this.config, from, beats, (file, line, id) => s.seen.get(file)?.get(line) === id)
   }
 
   /** Reports a batch that played in memory failed, without queuing it; nothing else changes. */
-  private async reject(s: Session, actions: Action[], rehearsal: Awaited<ReturnType<typeof rehearse>>): Promise<Report> {
+  private async reject(s: Session, beats: Beat[], rehearsal: Awaited<ReturnType<typeof rehearse>>): Promise<Report> {
     const rehearsed = rehearsal.result
-    const index = actions.length - (rehearsed.unplayed?.length ?? 0) + 1
-    const rejected: NonNullable<Report["rejected"]> = { index, action: actions[index - 1]!, error: rehearsed.error! }
+    // The failing action leads what didn't play, so the beats and actions before it played.
+    const unplayed = rehearsed.unplayed ?? []
+    const beat = beats.length - unplayed.length + 1
+    const left = unplayed[0]?.do ?? []
+    const actions = beats[beat - 1]?.do ?? []
+    const action = actions.length - left.length + 1
+    const rejected: NonNullable<Report["rejected"]> = { beat, action, value: actions[action - 1]!, error: rehearsed.error! }
     if (rehearsed.code) rejected.code = rehearsed.code
     for (const sighting of rehearsal.sightings) this.saw(s, rehearsal.after.lines, sighting)
     const report = { ...this.snapshot(s, undefined, false), rejected }
@@ -513,17 +650,37 @@ export class Controller {
     if (s.queue[0]?.state === "playing" && s.timeline.isInterrupted) return false
     switch (call.kind) {
       case "step":
-        if (!call.batch) return s.queue.length === 0
-        return call.batch.state === "done" || s.queue[0] === call.batch
+        // Waiting with an empty batch is waiting for what played, and a run's output (or a failure)
+        // is what it waits for: it comes as soon as it lands, not after the batches queued behind it.
+        if (!call.batch) return s.queue.length === 0 || s.finished.some((r) => r.status !== "completed" || (r.runs?.length ?? 0) > 0)
+        return call.batch.state !== "queued" || this.room(s, call.batch)
       case "end":
         return s.queue.length === 0
       case "listen":
-        if (s.finished.some((r) => r.status !== "completed")) return true
+        // A failure, or a run's output, is news the agent is waiting for even while listening for
+        // the programmer: without this, a run it waits on with `listen` — as it's told to — would
+        // only reach it at the heartbeat. Its own finished typing is not news; `listen` stays the
+        // programmer's.
+        if (s.finished.some((r) => r.status !== "completed" || (r.runs?.length ?? 0) > 0)) return true
         if (s.queue.length > 0) return false
         if (s.scene.turn === "agent") return s.events.some(interrupting)
         // The programmer's edits during their turn wait until they pause typing.
         return s.events.some((e) => e.kind !== "edit") || (s.navigatorReady && s.events.some(interrupting))
     }
+  }
+
+  /**
+   * The agent may work ahead of `batch`: few enough batches wait in front of it, not yet playing,
+   * that writing more now is unlikely to be thrown away. A count, not a guess at playing time: the
+   * agent is held only once the queue is full.
+   */
+  private room(s: Session, batch: Batch): boolean {
+    let waiting = 0
+    for (const b of s.queue) {
+      if (b === batch) break
+      if (b.state === "queued") waiting++
+    }
+    return waiting < this.config.workAheadBatches
   }
 
   private pump(): void {
@@ -615,13 +772,33 @@ export class Controller {
     const b = submitted
     if (b && b.state !== "done") report.submitted = { id: b.id, status: b.state }
     if (waiting) report.waiting = true
+    if (this.pauseReasons.size > 0) report.paused = true
+    if (s.stillMs !== undefined) report.stillMs = s.stillMs
+    s.stillMs = undefined
+    // Named by its batch: the agent knows batches, not the panel's command ids.
+    if (s.confirming && s.queue[0]) report.confirming = { id: s.queue[0].id, command: s.confirming.command }
+    const voice = this.voice?.enabled === true
+    if (s.toldVoice !== voice) report.voice = voice ? "on" : "off"
+    s.toldVoice = voice
+    // What the agent now has to answer, for the voice to fill its thinking with the right words.
+    s.news = events.some((e) => e.kind === "message" || e.kind === "turn")
+      ? "message"
+      : batches.some((r) => r.status === "failed" && (r.runs?.length ?? 0) > 0)
+        ? "failed"
+        : batches.some((r) => (r.runs?.length ?? 0) > 0)
+          ? "ran"
+          : events.some((e) => e.kind === "interrupt" || (e.kind === "edit" && e.by === "programmer")) || batches.some((r) => r.status !== "completed")
+            ? "interrupted"
+            : undefined
     return report
   }
 
   private close(s: Session): void {
     if (this.session === s) this.session = null
     s.timeline.interrupt()
+    this.voice?.stop()
     clearTimeout(s.navigatorTimer)
+    clearTimeout(s.fillTimer)
     this.editor.renderPoint(null)
     this.render()
   }
@@ -630,7 +807,7 @@ export class Controller {
 
   private discard(s: Session, batch: Batch): void {
     batch.state = "done"
-    batch.result = { id: batch.id, status: "discarded", unplayed: batch.actions }
+    batch.result = { id: batch.id, status: "discarded", unplayed: batch.beats }
     s.finished.push(batch.result)
   }
 
@@ -640,6 +817,7 @@ export class Controller {
     for (const b of s.queue) if (b.state === "queued") this.discard(s, b)
     s.queue = s.queue.filter((b) => b.state !== "done")
     s.timeline.interrupt()
+    this.voice?.stop()
   }
 
   private update(): void {
@@ -661,7 +839,7 @@ export class Controller {
         if (!batch) break
         this.startHead(s)
         this.render()
-        const { result, sightings } = await s.player.play(batch.id, batch.actions)
+        const { result, sightings } = await s.player.play(batch.id, batch.beats)
         if (this.session !== s) break
         // It played as it did in memory, so the lines it typed are the ones later batches were rehearsed with.
         if (result.status === "completed" && batch.after) s.lines.adopt(batch.after.lines)
@@ -673,6 +851,20 @@ export class Controller {
         if (result.status !== "completed") this.interrupt(s)
         // Mark the next batch as playing before reporting, so the report says so.
         this.startHead(s)
+        // A run with nothing planned after it: the agent reads its result now, and the programmer
+        // would sit in silence while it does. The voice reads it off the screen at once, as a
+        // person at the desk would, and the report says so. A run left running has no result yet.
+        const ran = result.runs?.at(-1)
+        const settled = result.status === "completed" || result.error?.kind === "command_failed"
+        if (ran && ran.exit_code !== undefined && settled && s.queue.length === 0 && s.scene.turn === "agent" && this.voice?.ready) {
+          ran.said = readOut(ran)
+          void this.voice.speak(ran.said)
+        }
+        // Run dry with no call waiting: the agent is writing the next batch while the editor sits still.
+        if (result.status === "completed" && s.queue.length === 0 && this.call === null && s.scene.turn === "agent") {
+          s.stillSince = Date.now()
+          s.news = "drained"
+        }
         this.update()
       }
     } finally {
@@ -727,10 +919,52 @@ export class Controller {
     const state = this.state()
     this.editor.renderCursor(s ? this.cursorView(s) : null, state, s?.scene.focus ?? "cursor")
     if (!s) return
+    this.fillSilence(s, state)
     const paused = this.pauseReasons.size > 0
-    const key = `${state}/${s.scene.turn}/${paused}`
+    const ahead = s.queue.filter((b) => b.state === "queued").length
+    // Between calls the agent is at work: thinking, or writing the batches ahead.
+    const working = s.scene.turn === "agent" && this.call === null
+    const key = `${state}/${s.scene.turn}/${paused}/${ahead}/${working}`
     if (key === this.lastPosted) return
     this.lastPosted = key
-    this.panel.post({ type: "state", state, turn: s.scene.turn, paused })
+    this.panel.post({ type: "state", state, turn: s.scene.turn, paused, ahead, working })
+  }
+
+  /**
+   * While the agent thinks with the editor still, after something it has to answer, the voice makes
+   * the small sound a person would: a few seconds in, and once more if it goes on. A stretch ends
+   * when the agent's words come, or it waits on the programmer; a filler not yet heard is taken back.
+   */
+  private fillSilence(s: Session, state: AgentState): void {
+    if (state !== "thinking" || this.call !== null || s.news === undefined) {
+      clearTimeout(s.fillTimer)
+      s.fillTimer = undefined
+      s.fills = 0
+      s.takeBackFill?.()
+      s.takeBackFill = undefined
+      return
+    }
+    if (s.fillTimer !== undefined || s.fills >= MAX_FILLS) return
+    // Picked and made now, while the wait runs, so it's heard on time; never the last one again.
+    const words = FILLERS[s.fills === 0 ? s.news : "long"].filter((w) => w !== s.lastFill)
+    const text = words[Math.floor(this.config.random() * words.length)]!
+    if (this.voice?.ready) this.voice.prepare(text, 0)
+    s.fillTimer = setTimeout(
+      () => {
+        s.fillTimer = undefined
+        const voice = this.voice
+        if (this.session !== s || !voice?.ready) return
+        s.fills++
+        s.lastFill = text
+        let heard = false
+        const taken = new AbortController()
+        void voice.speak(text, undefined, () => (heard = true), taken.signal)
+        s.takeBackFill = () => {
+          if (!heard) taken.abort()
+        }
+        this.fillSilence(s, this.state())
+      },
+      s.fills > 0 ? FILL_AGAIN_MS : FILL_FIRST_MS[s.news],
+    )
   }
 }

@@ -1,8 +1,13 @@
 **
 !dist/extension.js
 !dist/relay.js
+!dist/voiceWorker.js
+!dist/ompExtension.js
+!dist/chatterboxWorker.py
+!dist/chatterboxTorchWorker.py
 !package.json
 !README.md
 !CHANGELOG.md
 !media/icon.png
+!media/voices/**
 !LICENSE

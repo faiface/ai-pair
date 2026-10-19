@@ -32,9 +32,20 @@ Status: **draft**.
 - **The VS Code adapter** is a thin layer over the VS Code API: apply edits with
   undo stops, report document changes, render decorations, scroll, save. It
   tells the agent's edits apart from the programmer's by tracking the document
-  versions its own edits produce.
+  versions its own edits produce. A change landing within 300 ms right where
+  its last edit ended, and not an undo or a save's, is another extension
+  answering its typing (auto-closing quotes, format on type): it undoes that
+  before its next edit, so it never reaches the core.
 - **The narration panel** is a webview. It talks to the extension via
   `postMessage`.
+- **Starting an agent** is as thin as it looks: the panel's Start button
+  types the chosen agent's command into a terminal — an open one only if
+  shell integration says it is free and already standing in the workspace,
+  else a new one there — after setting the pair server up in that agent
+  if it isn't. The
+  extension hosts no agent; each harness stays its own app and reaches the
+  editor through `pair-mcp`, so nothing about the protocol changes for any
+  of them.
 
 ### Why a relay
 
@@ -152,16 +163,143 @@ VS Code itself (Copilot) need no setup: the extension provides the server to
 them through VS Code's MCP API, running the relay directly in the workspace.
 For any other harness it copies the config snippet to the clipboard. The
 extension offers this once, the first time it starts. The harnesses and their
-files are in [`agents.ts`](packages/vscode/src/agents.ts).
+files are in [`agents.ts`](packages/vscode/src/agents.ts). OMP's entry
+carries `timeout: 0`, since pair calls block while the
+programmer watches and replies, far past OMP's 30-second MCP default.
 
-**Each session.** The programmer asks the agent to pair ("let's pair on adding
-a todos API, I'm new to Express"), or runs the server's `start` prompt (in
-Claude Code: `/mcp__pair__start`). The agent calls `start`, which returns the
-[agent guide](AGENT_GUIDE.md) along with the first report.
+**Each session.** The programmer picks the session's pairing mode beside
+the panel's Start button (Build, or Learn at three splits of who does the
+work; remembered, and fixed once a session starts), asks the agent to pair
+("let's pair on adding a todos API, I'm new to Express"), or runs the
+server's `start` prompt (in Claude Code: `/mcp__pair__start`). The agent
+calls `start`, which returns the [agent guide](AGENT_GUIDE.md) and the
+mode's page (`modeGuide.ts` in the relay, from the mode in the first
+report) along with the first report.
 
-**Later, from the editor.** Starting from the editor (type the task in the
-panel, and the extension launches the harness in the integrated terminal)
-would be a convenience on top, with a small adapter per harness. Not in v1.
+**An agent, from the editor.** The panel's **Start** (or _AI Pair: Start
+Agent_) sets the pair server up in the chosen agent if it isn't, then
+opens a terminal in the workspace folder and runs its command there
+(`omp`, `claude`, `codex`, `opencode`, `gemini`, or a custom command the
+programmer gave, flags and all). That is all it does: the conversation
+happens in the agent's own screen, and pairing starts from there as
+above. The pick is remembered; Cursor has no terminal command, so it
+isn't offered.
+
+**What didn't play leaves OMP's history.** When the programmer interrupts,
+the batches written ahead never play, but the `step` calls that sent them
+stay in the agent's history, and a model tends to believe what it sees
+itself write. So an OMP started from the panel also loads a small OMP extension
+([`ompExtension.ts`](packages/relay/src/ompExtension.ts), bundled to
+`dist/ompExtension.js` and passed with `-e`). On OMP's `context` hook it runs
+[`history.ts`](packages/relay/src/history.ts): it reads each interrupted,
+discarded or failed batch's "Not played" lines back from its report, finds
+the `step` call that sent that batch (by the "Batch N is queued" line in its
+result, or, when an interruption discarded it at once, as the last batch its
+own result lists), and cuts that call down to the beats that played. A beat
+cut short keeps its `say`, which was heard, and the actions that played
+whole. Where OMP keeps the provider's own record of the message (OpenAI
+Responses items, sent back in its place to keep the model's reasoning), the
+call is cut there too. It
+changes only what the model is sent, never the saved session, and it depends
+on the history alone, so the same history always gives the same rewrite and
+the provider's prompt cache still holds. Other agents have no such hook; they
+go by the report, which says plainly that what didn't play never happened.
+
+## The voice
+
+A beat's `say` can be spoken instead of only shown. The player asks its stage
+for a voice ([`VoicePort`](packages/core/src/ports.ts)); without one the words
+are shown for their reading time. Either way a beat's words and its actions
+start together, and the next beat starts once both are done. With a voice,
+the player measures how long the beat's actions will take to play and hands
+that span to `speak`, and the voice spreads its sentences across it — a
+touch slower or faster, with pauses between sentences. Making speech takes a
+moment — longer for a heavier model, or behind words still queued — so
+`speak` also says when the words are first heard, and the actions wait for
+that (`timing.voice.maxStartMs` caps the wait, so a stuck voice can't stall
+the session); the hands never run ahead of the words about them. When the
+words run longer than the actions, the voice gets that much of a head start
+(`timing.voice.maxLeadMs` caps it), so talking and working end about
+together, and the beat is then heard out in full before the next one starts,
+so a `point` highlight stays on the code while it's talked about. A voice
+that goes quiet without finishing is let go after about twice the line's
+length. Without a voice, the actions start after `timing.voice.leadMs` (or
+the reading time, if shorter), and the beat lasts as long as the longer of
+reading and working. Interruptions settle the `speak` promise by stopping
+the voice. Rehearsals never get a voice: they are silent.
+
+The agent is told whether the voice is on (`VoicePort.enabled`): in the
+`start` report, and again in the first report after it changes, so it
+writes `say` for the ear or for the eye.
+
+**Speech is made ahead.** When a batch is queued, the controller hands each of
+its beats' `say`s to `VoicePort.prepare`, with the span the player will give it, so
+its sentences are made while the batches before it play and the batch starts
+talking at once. The speech queue
+([`voiceQueue.ts`](packages/vscode/src/voiceQueue.ts)) makes them in order, one
+at a time and a few ahead at most, so a fresh `say` after an interruption
+waits behind one sentence, not the whole queue. `speak` takes the one made
+for it; early ones it passes over, and everything made early when the voice
+is stopped, are let go.
+
+There are two voice models (`aiPair.voice.model`), each kept warm in a
+worker process that takes one sentence per JSON line in and writes a WAV per
+line; the extension ([`voice.ts`](packages/vscode/src/voice.ts)) restarts the
+worker when the model changes.
+
+The default is **Kokoro**, a light local speech model, in
+[`voiceWorker.ts`](packages/vscode/src/voiceWorker.ts) (built to
+`dist/voiceWorker.js`). It cannot run under VS Code's Electron
+runtime — the hardened runtime refuses the speech engine's native code —
+so bun, else node, found on the machine runs it. The pinned `kokoro-js`
+is fetched on first turn-on into the extension's own storage
+(`kokoro-<version>`, by bun or npm), the way Chatterbox is fetched by
+uv: the voice belongs to AI Pair, not to any agent, and needs no agent
+installed.
+
+**Chatterbox** (Resemble AI's Turbo model, MIT) sounds more natural but is
+heavier. On an Apple Silicon Mac it runs on the GPU through
+[mlx-audio](https://github.com/Blaizzy/mlx-audio) at about 1.5× real time
+(the 4-bit model; ONNX on the CPU managed under half); everywhere else it
+runs in its original PyTorch form (Resemble's `chatterbox-tts` package),
+on an NVIDIA card when there is one and slower on the CPU. Both workers
+are Python — [`chatterboxWorker.py`](packages/vscode/src/chatterboxWorker.py)
+and [`chatterboxTorchWorker.py`](packages/vscode/src/chatterboxTorchWorker.py)
+— speaking the same lines to the extension, run by `uv tool run --from
+<pinned package>` so no system Python is needed; the pins matter, because
+the MLX worker swaps voices through a private field, and the PyTorch one's
+watermarker still needs an older setuptools beside it. Only a click may
+download: at startup the worker runs `--offline` with `HF_HUB_OFFLINE`,
+and if the model isn't there yet it says so; turning the voice on fetches
+it (about 1.3 GB on a Mac, a few GB elsewhere, once). Its voice is the
+model's own, or one cloned from a recording the programmer picks. It has
+no pace to set, so on a Mac its recording is played faster through
+`afplay --rate`, which keeps the pitch. Either way it is never fitted to
+a line's typing span: a natural voice played back faster and slower line
+by line is plainly heard doing it, so it keeps one steady pace (below)
+and only pauses between its sentences spread it over the typing.
+
+**Pace.** One speed control drives typing and talking. The voice follows the
+session speed from 1× up to 2×: slower sessions keep its natural pace and
+just pause more, and past 2× words blur. `aiPair.voice.rate` multiplies on
+top, and for Kokoro span fitting nudges each line; all together stays
+within 0.5× and 2×. Kokoro takes the pace as its `speed` up to 1.3×; past
+that it speeds up by giving each sound fewer frames, and short sounds run
+out of them and words smear. A faster line is made at 1.3× and its
+recording sped up the rest of the way at the same pitch, in the worker
+(`timeStretch.ts`, overlap-add with each window lined up on the one before).
+Chatterbox takes just the one pace, steady, as its playback rate.
+
+Either way, the extension
+puts each `say` the way a programmer says it out loud
+([`voiceText.ts`](packages/vscode/src/voiceText.ts): `req.body` is "req dot
+body", `user_id` "user id", `createTodo` "create todo", 404 "four oh four"),
+splits it into sentences — a dot inside a word ends none — makes the next
+while the last plays through the OS player (`afplay`, PowerShell's
+SoundPlayer, PulseAudio/PipeWire tools), and drops the oldest waiting
+sentences when speech falls behind.
+Words are spoken for every agent alike: the sound
+hangs off playback, not off the harness.
 
 ## Distribution
 
@@ -193,6 +331,7 @@ the official MCP TypeScript SDK.
 
 - **Permission prompts.** When the harness asks for permission, it notifies the
   programmer itself.
-- **Starting from the editor** (see above).
+- **Starting other harnesses from the editor.** OMP starts from the panel
+  (above); the rest are still launched by the programmer.
 - **Multiple agents** in one window.
 - **Zed.**

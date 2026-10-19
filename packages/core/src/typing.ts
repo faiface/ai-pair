@@ -66,7 +66,11 @@ export function planTyping(
   return chunks
 }
 
+/** How many words a `say` holds, for pacing it read or spoken. */
+export function wordCount(text: string): number {
+  return text.split(/\s+/).filter(Boolean).length
+}
+
 export function readingTime(text: string, reading: Reading): number {
-  const words = text.split(/\s+/).filter(Boolean).length
-  return Math.min(reading.maxMs, Math.max(reading.minMs, words * reading.msPerWord))
+  return Math.min(reading.maxMs, Math.max(reading.minMs, wordCount(text) * reading.msPerWord))
 }
