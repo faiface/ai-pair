@@ -19,6 +19,8 @@ export type Host = {
 export type Agent = {
   id: string
   label: string
+  /** The command that starts it in a terminal, where it has one: Cursor is an editor, so it hasn't. */
+  run?: string
   /** Its CLI is on the PATH, or its configuration is there. */
   detect(host: Host): boolean
   /** Configured to run `command` as the pair server. */
@@ -32,8 +34,41 @@ export const SERVER = "pair"
 
 export const AGENTS: Agent[] = [
   {
+    id: "omp",
+    label: "OMP",
+    run: "omp",
+    detect: (host) => !!findOmp(host) || exists(path.join(host.home, ".omp")),
+    isSetUp: (host, command) => {
+      const data = readJson(ompFile(host))
+      const entry = data?.mcpServers?.[SERVER]
+      if (entry?.command !== command) return false
+      // OMP turns a server off three ways: its own `enabled: false`, the user allowlist that can
+      // force it back on, and the denylist, which wins over both.
+      if (Array.isArray(data?.disabledServers) && data.disabledServers.includes(SERVER)) return false
+      if (entry.enabled === false && !(Array.isArray(data?.enabledServers) && data.enabledServers.includes(SERVER))) return false
+      // Pair calls block while the programmer watches and replies, far past OMP's 30s MCP default.
+      if (entry.timeout !== 0) return false
+      return readText(ompPresenterFile(host)) === OMP_PRESENTER
+    },
+    async setUp(host, command) {
+      const file = ompFile(host)
+      if (!exists(file)) {
+        write(file, `{\n  "$schema": "https://raw.githubusercontent.com/can1357/oh-my-pi/main/packages/coding-agent/src/config/mcp-schema.json"\n}\n`)
+      }
+      editJson(file, ["mcpServers", SERVER], { type: "stdio", command, args: [], enabled: true, timeout: 0 })
+      const data = readJson(file)
+      if (Array.isArray(data?.disabledServers) && data.disabledServers.includes(SERVER)) {
+        editJson(file, ["disabledServers"], data.disabledServers.filter((name: unknown) => name !== SERVER))
+      }
+      // The setup owns this agent file, so a newer version replaces the old one.
+      write(ompPresenterFile(host), OMP_PRESENTER)
+      return file
+    },
+  },
+  {
     id: "claude",
     label: "Claude Code",
+    run: "claude",
     detect: (host) => !!which(host, "claude", [path.join(host.home, ".local", "bin")]) || exists(claudeFile(host)),
     isSetUp: (host, command) => readJson(claudeFile(host))?.mcpServers?.[SERVER]?.command === command,
     async setUp(host, command) {
@@ -52,6 +87,7 @@ export const AGENTS: Agent[] = [
   {
     id: "codex",
     label: "Codex",
+    run: "codex",
     detect: (host) => !!which(host, "codex") || exists(codexDir(host)),
     isSetUp: (host, command) => {
       const text = readText(path.join(codexDir(host), "config.toml"))
@@ -68,6 +104,7 @@ export const AGENTS: Agent[] = [
   {
     id: "opencode",
     label: "OpenCode",
+    run: "opencode",
     detect: (host) => !!which(host, "opencode", [path.join(host.home, ".opencode", "bin")]) || exists(opencodeDir(host)),
     isSetUp: (host, command) =>
       ["config.json", "opencode.json", "opencode.jsonc"].some(
@@ -85,6 +122,7 @@ export const AGENTS: Agent[] = [
   {
     id: "gemini",
     label: "Gemini CLI",
+    run: "gemini",
     detect: (host) => !!which(host, "gemini") || exists(path.join(host.home, ".gemini")),
     isSetUp: (host, command) => readJson(geminiFile(host))?.mcpServers?.[SERVER]?.command === command,
     async setUp(host, command) {
@@ -123,6 +161,43 @@ function geminiFile(host: Host): string {
 
 function cursorFile(host: Host): string {
   return path.join(host.home, ".cursor", "mcp.json")
+}
+
+/**
+ * OMP's own MCP file: in its agent folder, which `PI_CODING_AGENT_DIR` moves, and a named
+ * profile (`OMP_PROFILE`) keeps apart from the default one.
+ */
+export function ompFile(host: Host): string {
+  if (host.env.PI_CODING_AGENT_DIR) return path.join(host.env.PI_CODING_AGENT_DIR, "mcp.json")
+  const profile = host.env.OMP_PROFILE || host.env.PI_PROFILE
+  const dir =
+    profile && !profile.includes("/") && !profile.includes("\\") && profile !== ".."
+      ? path.join(host.home, ".omp", "profiles", profile, "agent")
+      : path.join(host.home, ".omp", "agent")
+  return path.join(dir, "mcp.json")
+}
+
+/**
+ * OMP's presenter agent, which the author guide asks the author to start. It names no model, so it
+ * runs on the author's own: a weaker one played the stages badly. Thinking is off, so it's quick.
+ */
+const OMP_PRESENTER = `---
+name: pair-presenter
+description: Presents an AI Pair session in the programmer's editor, playing the author's stages. The author starts it right after the pair server's start.
+thinkingLevel: off
+---
+
+You present a live AI Pair pairing session in the programmer's editor. Call the join tool of the pair server, then follow the presenter guide it returns until the session ends. Never end your turn before it does.
+`
+
+/** Where OMP finds the presenter agent: the agents folder beside its MCP configuration. */
+function ompPresenterFile(host: Host): string {
+  return path.join(path.dirname(ompFile(host)), "agents", "pair-presenter.md")
+}
+
+/** The `omp` program: on the PATH, or where its installers put it off the PATH. */
+export function findOmp(host: Host): string | undefined {
+  return which(host, "omp", [path.join(host.home, ".local", "bin"), path.join(host.home, ".bun", "bin")])
 }
 
 // ---- Programs --------------------------------------------------------------

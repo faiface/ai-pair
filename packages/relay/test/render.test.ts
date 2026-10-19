@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest"
 import type { Report } from "@ai-pair/protocol"
 import { renderFile, renderReport } from "../src/render"
+import { modeGuide } from "../src/modeGuide"
 
 const report = (r: Partial<Report>): Report => ({ batches: [], events: [], turn: "agent", ...r })
 
@@ -27,12 +28,13 @@ describe("reports", () => {
     expect(text).toMatch(/Batch 6 is playing/)
   })
 
-  it("says a rejected batch wasn't queued, which action would fail and why, and how the code would read", () => {
+  it("says a rejected batch wasn't queued, which beat and action would fail and why, and how the code would read", () => {
     const text = renderReport(
       report({
         rejected: {
-          index: 3,
-          action: { move: { line: 2, at: "x▌" } },
+          beat: 2,
+          action: 3,
+          value: { move: { line: 2, at: "x▌" } },
           error: { kind: "ambiguous", message: "2 matches", candidates: [{ line: 1, context: "x" }] },
           code: { file: "a.ts", lines: [{ number: 3, text: "y▌" }] },
         },
@@ -40,7 +42,7 @@ describe("reports", () => {
       "step",
     )
     expect(text).toMatch(/rejected/)
-    expect(text).toMatch(/action 3 would fail:\n  \{"move":\{"line":2,"at":"x▌"\}\}/)
+    expect(text).toMatch(/action 3 of beat 2 would fail:\n  \{"move":\{"line":2,"at":"x▌"\}\}/)
     expect(text).toMatch(/ambiguous: 2 matches\n  line 1: x/)
     expect(text).toMatch(/a\.ts:\n3  y▌/)
     expect(text).toMatch(/submit the whole batch again/)
@@ -74,7 +76,7 @@ describe("reports", () => {
     expect(text).toMatch(/line 2\n.*…\n.*line 58/)
   })
 
-  it("puts what the programmer did first, and lists unplayed actions ready to resubmit", () => {
+  it("puts what the programmer did first, and lists unplayed beats ready to resubmit", () => {
     const text = renderReport(
       report({
         events: [{ kind: "message", text: "use zod\nplease" }],
@@ -83,7 +85,7 @@ describe("reports", () => {
             id: 6,
             status: "interrupted",
             code: { file: "a.ts", lines: [{ number: 3, text: "  res.sta▌" }] },
-            unplayed: [{ type: "tus(▌)" }],
+            unplayed: [{ do: [{ type: "tus(▌)" }] }],
           },
           { id: 7, status: "discarded", unplayed: [{ say: "Next." }] },
         ],
@@ -93,12 +95,12 @@ describe("reports", () => {
     expect(text.indexOf("use zod")).toBeLessThan(text.indexOf("Batch 6"))
     expect(text).toMatch(/> please/)
     expect(text).toMatch(/Batch 6 interrupted/)
-    expect(text).toContain(JSON.stringify({ type: "tus(▌)" }))
+    expect(text).toContain(JSON.stringify({ do: [{ type: "tus(▌)" }] }))
     expect(text).toMatch(/Batch 7 discarded/)
     expect(text).toContain(JSON.stringify({ say: "Next." }))
   })
 
-  it("says why a batch failed, with the candidates, and which action failed", () => {
+  it("says why a batch failed, with the candidates, and which beat failed", () => {
     const text = renderReport(
       report({
         batches: [
@@ -113,7 +115,7 @@ describe("reports", () => {
                 { line: 31, context: "x = 2" },
               ],
             },
-            unplayed: [{ move: { line: 2, at: "x▌" } }],
+            unplayed: [{ do: [{ move: { line: 2, at: "x▌" } }] }],
           },
         ],
       }),
@@ -122,7 +124,7 @@ describe("reports", () => {
     expect(text).toMatch(/ambiguous: 2 matches/)
     expect(text).toMatch(/line 12: x = 1/)
     expect(text).toMatch(/line 31: x = 2/)
-    expect(text).toMatch(/the one that failed/)
+    expect(text).toMatch(/the beat that failed/)
   })
 
   it("shows a command's outcome and output", () => {
@@ -174,5 +176,37 @@ describe("saving", () => {
     const text = renderReport(report({ batches: [{ id: 3, status: "completed", unsaved: [{ file: "a.ts", error: "the file on disk is newer" }] }] }), "step")
     expect(text).toMatch(/Couldn't save a\.ts \(the file on disk is newer\)/)
     expect(text).toMatch(/file on disk doesn't/)
+  })
+})
+
+describe("modes", () => {
+  it("names the session's mode in the join report and points at its page", () => {
+    expect(renderReport(report({ mode: "build" }), "join")).toMatch(/Build mode/)
+    const learn = renderReport(report({ mode: "learn", drive: "together" }), "join")
+    expect(learn).toMatch(/Learn mode/)
+    // The mode refines the guide, so the agent is told which wins.
+    expect(learn).toMatch(/mode page wins/)
+    expect(renderReport(report({}), "step")).not.toMatch(/mode/)
+  })
+
+  it("gives each learn split its own who-does-the-work words, over one shared core", () => {
+    const show = modeGuide(report({ mode: "learn", drive: "show" })) ?? ""
+    const together = modeGuide(report({ mode: "learn", drive: "together" })) ?? ""
+    const drive = modeGuide(report({ mode: "learn", drive: "try" })) ?? ""
+    // Shared teaching core: one idea at a time, never a cold question.
+    for (const page of [show, together, drive]) {
+      expect(page).toMatch(/One idea per chunk/)
+      expect(page).toMatch(/Never ask about what you haven't taught/)
+    }
+    // The split is who types, and each page carries only its own split.
+    expect(show).toMatch(/Type everything/)
+    expect(show).not.toMatch(/worked example/)
+    expect(together).toMatch(/worked example/)
+    expect(together).toMatch(/take the turn/)
+    expect(drive).toMatch(/mostly the programmer/)
+    expect(drive).not.toMatch(/worked example, explained as it lands\. Then/)
+    // An unknown or absent mode has no page, so older editors change nothing.
+    expect(modeGuide(report({}))).toBeUndefined()
+    expect(modeGuide(report({ mode: "build" }))).toMatch(/Build/)
   })
 })

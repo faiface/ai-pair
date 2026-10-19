@@ -81,6 +81,11 @@ export class LineIds {
     if (v) this.versions.set(file, applyChange(v, change))
   }
 
+  /** The file's text and line identities, after the changes it followed: none if it doesn't track it yet. */
+  known(file: string): Version | undefined {
+    return this.versions.get(file)
+  }
+
   /** A copy to play batches in memory: its changes don't affect this one. */
   fork(): LineIds {
     return this.base ? new LineIds(this.base, new Map(this.versions)) : new LineIds(this, new Map())

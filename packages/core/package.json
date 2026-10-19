@@ -7,6 +7,7 @@
   "dependencies": {
     "@ai-pair/protocol": "*",
     "diff": "^9.0.0",
+    "node-diff3": "^3.2.1",
     "ws": "^8.21.3"
   },
   "devDependencies": {

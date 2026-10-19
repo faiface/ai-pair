@@ -5,7 +5,15 @@ during a pair programming session. The agent talks to the extension over MCP;
 the extension renders the agent's actions (a second cursor, typing, a narration
 panel) and reports back what happened, including everything the programmer did.
 
-This document covers only what the agent can do and observe. How the extension
+A session has two agents, which the programmer meets as one partner. The
+**author** does the work, out of sight, in a private copy of the project, and
+records it in [stages](#stages). The **presenter** plays each stage in the
+programmer's editor at a human pace, explaining it, and answers the
+programmer. Usually the presenter is a subagent the author starts on its own
+model with thinking off; an agent without subagents does both itself, recording all its stages
+first. Most of this document is about the presenter's side, the playing.
+
+This document covers only what the agents can do and observe. How the extension
 presents it to the programmer is in [DESIGN.md](DESIGN.md), and how the tool is
 built and connected is in [ARCHITECTURE.md](ARCHITECTURE.md).
 
@@ -29,11 +37,15 @@ by feel.
 2. **The programmer always preempts the agent.** Anything the programmer does
    takes effect immediately on their side. The agent learns about it on its
    next call.
-3. **Events are delivered exactly once**, in the reports of `step` and `listen`.
+3. **Events are delivered exactly once**, in the reports of `step` and
+   `listen` to the presenter, and of the author's tools to the author.
 4. **No stale plans.** A batch never plays if it was planned without knowledge
    of an interrupting event.
-5. **During a session, the agent never ends its turn.** When it has nothing to
-   do, it calls `listen` and waits for the programmer.
+5. **During a session, neither agent ends its turn.** With nothing to do, the
+   presenter calls `listen` and waits for the programmer, and the author
+   calls `wait`.
+6. **The programmer's edits stand.** Their code is theirs: the agents build on
+   it, and never undo it as drift from their plan.
 
 ## Concepts
 
@@ -41,10 +53,11 @@ by feel.
 second cursor. The extension tracks it through the programmer's edits, like a
 marker.
 
-**Action.** A single visible operation: say something, move, select, type,
-delete, point, run a command.
+**Action.** A single visible operation: move, select, type, delete, point, run a command.
 
-**Batch.** An ordered list of actions submitted in one `step` call. A batch is
+**Beat.** One moment of a batch: words (`say`) and the actions they go with (`do`), played together. A beat's voice and actions start together; the next beat starts once both are done. Either may be missing: a beat of only `say` talks, one of only `do` works quietly.
+
+**Batch.** An ordered list of beats submitted in one `step` call. A batch is
 the unit of planning: one idea, typically one narration plus the few edits it
 describes.
 
@@ -63,30 +76,43 @@ works with the agent as usual, pairs for a while, ends the session, and may
 pair again later. Outside a session, all tools except `start` fail with
 `no_session`.
 
+**Stage.** One step of the author's work, as the author recorded it from its
+copy: what changed since the stage before, with notes for the presenter. The
+presenter plays the stages in order; see [Stages](#stages).
+
 ## Timing model
 
 In the normal case, the contract is:
 
-> **Every `step` call submits a new batch and returns the report for the
-> previous batch.**
+> **Every `step` call submits a new batch and returns at once while the
+> agent is not too far ahead of playback; its report holds whatever finished
+> meanwhile.**
 
 Concretely:
 
 1. The first `step` call returns immediately. Its batch starts playing and the
-   agent goes on to think about the next batch.
-2. The second `step` call queues its batch and **blocks until the first batch
-   finishes playing**. It then returns the first batch's report, and the second
-   batch starts playing.
-3. And so on. The agent is always planning batch N+1 while the programmer
-   watches batch N. It can never get more than one batch ahead.
-4. After its last batch, the agent calls `listen`, which collects that batch's
-   report and then waits for the programmer.
+   agent goes on to write the next batch.
+2. Later `step` calls queue their batch and return at once while fewer than
+   `workAheadBatches` (_tunable_, 2, `aiPair.workAheadBatches`, an integer
+   from 0 to 10) batches wait in front of it, not yet playing. Further ahead,
+   the call **blocks until enough of them have played**. Either way it returns
+   the reports of the batches that finished since the last report.
+3. So the agent writes batch N+1, N+2, … while the programmer watches batch
+   N, and playback goes from one batch to the next without waiting for it to
+   think. With `workAheadBatches` at 0, it can never get more than one batch ahead:
+   each call returns when the batch before its own finishes.
+4. After its last batch, the agent calls `listen`, which collects the
+   remaining reports and then waits for the programmer.
 
 ```
-agent:      [think 1] step(1) [think 2] step(2)·····blocked·····  [think 3] step(3)····
-playback:                     [==== batch 1 ====][==== batch 2 ====][==== batch 3 ====]
-                                                  ^ step(2) returns report of batch 1
+agent:      [write 1] step(1) [write 2] step(2) [write 3] step(3) [write 4] step(4)···blocked···
+playback:                     [==== batch 1 ====][==== batch 2 ====][==== batch 3 ====][== 4 ==]
+                                                                    ^ step(4) returns: 1 and 2 finished
 ```
+
+Working ahead costs nothing when the plan holds. When the programmer steps
+in, the batches written ahead are discarded and returned as unplayed beats, which is
+why the lead is capped at a count of waiting batches.
 
 ### Precise rules
 
@@ -105,22 +131,28 @@ Rules:
 - **Rejection.** A batch that would fail, as far as the extension can tell
   when it's submitted (text that isn't on its line, a malformed action, a
   second file, an edit during the programmer's turn), is **rejected**: `step` returns at once
-  with the action that would fail, the error, and the code as it would read
+  with the beat and action that would fail, the error, and the code as it would read
   then. Nothing of it is queued, and the batches queued before it are
   unaffected.
-- **Blocking.** `step` enqueues its batch and blocks until the queue holds only
-  that batch (i.e. everything before it finished), or until an interrupting
-  event occurs.
+- **Blocking.** `step` enqueues its batch and blocks while `workAheadBatches`
+  or more batches wait in front of it (not counting the one playing) — until
+  enough have played, or an interrupting event occurs. An empty `step` blocks
+  until the queue is empty, or a batch has finished with a `run`'s output or
+  a failure.
+- **Commands waiting for the programmer.** While a `run` waits for the
+  programmer to allow it, any report says so (`confirming`), so an agent
+  whose call timed out knows why nothing finished.
 - **Continuity.** A batch only starts playing if the batch before it
   `completed`. Otherwise it is `discarded`: it was planned assuming the previous
   batch's outcome, which didn't happen.
 - **No stale plans.** If an interrupting event has occurred that the agent
   hasn't yet received in a report, a newly submitted batch is `discarded`
   immediately and the call returns right away.
-- **Nothing is lost.** Unplayed actions of `interrupted`, `failed`, and
+- **Nothing is lost.** Unplayed beats of `interrupted`, `failed`, and
   `discarded` batches are returned verbatim, so the agent can resubmit them
-  unchanged, modify them, or drop them. An action cut off partway through
-  comes back reduced to what it didn't do yet.
+  unchanged, modify them, or drop them. A beat cut short comes back as `{ do: rest }`,
+  without its `say`, which was already heard; later beats come back whole.
+  An action cut off partway through comes back reduced to what it didn't do yet.
 - **Places resolve at play time.** Places and spans in a batch are resolved
   when the action plays, not when the batch is submitted. A batch may therefore refer to
   text that an earlier, still-queued batch is going to type. (The agent's own
@@ -140,23 +172,51 @@ so every `move` is visible to them, or, right after a `point`, the pointed
 code.
 
 Playback pauses when the programmer presses Pause, navigates away, or starts
-typing a reply, until they resume. **Pausing is not an event**: the agent isn't told,
-its blocked call just waits longer (subject to `MAX_BLOCK`).
+typing a reply, until they resume. **Pausing is not an event**: reports carry
+`paused` while it lasts, so the agent knows its batches are held rather than
+lost. The programmer's own Pause answers a blocked `step` or `listen` at
+once with such a report, and resuming answers the next one the same way;
+other pauses (navigating away, typing a reply) only show in reports.
 
 ## Tools
 
-### `start(task?: string, cwd?: string) -> Report`
+The author's tools are `start`, `stage`, `wait` and `tell_presenter`; the
+presenter's are `join`, `step`, `listen`, `read` and `tell_author`; both have
+`end`. The author's calls come over the connection that called `start`; any
+other connection that calls `join` is a presenter. A connection that has done
+neither gets `no_session`, and a presenter calling an author's tool gets
+`invalid_arguments`. An agent without subagents calls `join` itself, after
+recording its stages, and has all of them.
 
-Starts a session in the editor window for the current project. `task` is a
-short description shown in the narration panel. `cwd` is the agent's working
-directory, absolute: the agent should always give it, since not every harness
-starts the MCP server there. Without it, or if no editor window has it open,
-the harness's MCP roots and then the server's own working directory are tried.
-Fails if a session is already active in that window, or if no editor window
-has the project open.
+### `start(task?: string, cwd?: string) -> AuthorReport`
 
-Besides the report, the result includes the [agent guide](AGENT_GUIDE.md),
-which the agent follows for the whole session.
+Starts a session in the editor window for the current project, with the
+caller as its author. `task` is a short description shown in the narration
+panel. `cwd` is the agent's working directory, absolute: the agent should
+always give it, since not every harness starts the MCP server there. Without
+it, or if no editor window has it open, the harness's MCP roots and then the
+server's own working directory are tried. Fails if a session is already
+active in that window, or if no editor window has the project open.
+
+It makes the author's **private copy** of the working directory, and the
+result says where it is: the author does all its work there, with its usual
+tools. In a git repository, the copy is a detached worktree of `HEAD` with the
+uncommitted changes brought over; otherwise a plain copy, whose blocks the
+filesystem clones where it can. Folders too heavy to copy are linked instead,
+shared with the programmer's project: in a repository, every git-ignored
+entry (dependencies, build output); elsewhere, folders like `node_modules`,
+`.venv`, `dist`, `build` and `target`. The copy is removed when the session
+ends.
+
+Besides the report, the result includes the [author guide](AUTHOR_GUIDE.md),
+which the author follows for the whole session, and the session's mode page.
+
+Before a session, the programmer picks its **pairing mode** in the panel:
+`build` (get it done, shown as it goes) or `learn` (teach it: one small
+idea at a time), and for `learn`, who does the work (`drive`: the agent
+shows, the two share it, or the programmer drives). The mode is fixed for
+the session and told in the `start` and `join` reports; its page rides with
+the guide and wins where the two differ.
 
 File paths given to and returned by all tools are relative to the agent's
 working directory (absolute paths work too).
@@ -164,14 +224,55 @@ working directory (absolute paths work too).
 The session starts in the agent's turn, with no agent cursor until the first
 `move`.
 
+### `stage(title: string, notes: string, last?: boolean) -> AuthorReport`
+
+Records the copy as it is now as the next stage: everything that changed
+since the stage before (or since the copy was made), with `title`, shown to
+the programmer where the stage starts, and `notes` for the presenter, who
+explains the stage from them. `last` says it's the last stage: the task is
+done once it has played, unless the author records more. Fails with
+`invalid_arguments` when nothing changed. Returns at once, with the number it
+recorded and the stage playing now; see [Stages](#stages).
+
+### `wait() -> AuthorReport`
+
+Returns the author's news, or waits for it, up to `MAX_BLOCK`: the
+programmer's edits carried into the copy, what the presenter told it, code
+of its stages the programmer's edits overrode, playback catching up with
+its stages, the presenter joining or leaving, and the session ending.
+
+### `tell_presenter(text: string) -> AuthorReport`
+
+Passes `text` to the presenter, in its next report (`author`); a `listen`
+returns with it. Returns the author's news, without waiting.
+
+### `join(cwd?: string) -> Report`
+
+Joins the active session as its presenter. Its report tells the voice, the
+mode, the stages that began so far (`briefs`) and what's left of the one
+playing (`stage`). Besides the report, the result includes the
+[presenter guide](PRESENTER_GUIDE.md) and the mode page. Fails with
+`no_session` when no session is active. A presenter that shares the author's
+MCP server stays on the author's editor window; one with a server of its own
+finds the window from `cwd`, as `start` does.
+
+### `tell_author(text: string)`
+
+Passes `text` to the author, which hears it in `wait`. The author hears only
+this and the programmer's edits, not what the programmer says to the
+presenter.
+
 ### `end(summary?: string) -> Report`
 
 Ends the session. Anything still queued plays out first. `summary` is shown as
-the closing message in the narration panel. Returns the final report.
+the closing message in the narration panel. Returns the final report. While a
+presenter is connected, the author's `end` fails with `invalid_arguments`:
+the presenter ends the session, once it has played the last stage and the
+programmer is done.
 
-### `step(actions: Action[]) -> Report`
+### `step(beats: Beat[]) -> Report`
 
-Submits a batch. Blocks as described in [Timing model](#timing-model).
+Submits a batch: an ordered list of beats. Blocks as described in [Timing model](#timing-model).
 
 **A batch works in one file.** It may name a file (in `move`, `select` or
 `point`) only before its first edit, and all the files it names must be the
@@ -180,7 +281,9 @@ piece of code. A batch that breaks this is rejected, like any batch that
 would fail, with `invalid_action` at the action that names a second file.
 
 An empty batch isn't a batch: `step([])` waits for the queued batches to
-finish, without waiting for the programmer, and reports them.
+finish, without waiting for the programmer, and reports them. A `run`'s
+output, or a failure, comes back as soon as its batch ends, without waiting
+for the batches queued behind it.
 
 ### `listen() -> Report`
 
@@ -189,7 +292,14 @@ Returns when:
 
 - all batches have finished and a programmer event arrives (message, turn
   change, …), or
-- a batch finishes with a status other than `completed`, or
+- a batch finishes with a status other than `completed`, or carrying a
+  `run`'s output — this is news the agent is usually waiting for, even
+  mid-`listen`, or
+- a new stage begins, or the author tells the presenter something, or
+- in the agent's turn, its batches have all played while the stage still has
+  code to put in: the editor stands still while the presenter has work. Only
+  as they finish; a `listen` called after that waits for the programmer, say
+  for the answer to a question, or
 - `MAX_BLOCK` elapses.
 
 `listen` is how the agent "ends its turn" without actually ending it.
@@ -207,11 +317,15 @@ file's name, whether it has unsaved changes, and its lines, numbered. Like a
 report's code, it says where the lines reach the end of the file, and whether
 a newline ends its last line. Does not block and does not deliver events.
 
-## Actions
+## Beats and actions
 
 ```ts
+type Beat = {
+  say?: string;
+  do?: Action[];
+};
+
 type Action =
-  | { say: string }
   | { move: Place }
   | { select: Span }
   | { type: string }          // with one ▌: where the cursor ends
@@ -219,11 +333,27 @@ type Action =
   | { delete: true }
   | { point: Span }
   | { run: string, wait?: number }
+  | { write: StageLines & { fast?: boolean } }
+  | { drop: StageLines };
+
+type StageLines = {
+  file?: string; // omitted: the cursor's file if the stage has lines left there, else the first that has
+  from?: string; // the first line left that contains it; omitted: the first line left in the file
+  through?: string; // the first line from `from` on that contains it; omitted: the rest of the stretch
+};
 ```
+
+A beat's voice and actions start together; the next beat starts once both are
+done. A beat with only `say` talks; one with only `do` works quietly. With the
+voice on, a long `say` gets ahead and its actions run under the rest of it.
+With the voice off, the text shows at the beat's start, its actions start
+after a short lead (capped by the reading time), and the beat lasts as long
+as the longer of the reading and the work.
 
 Each action is an object with exactly one of these keys. Anything else is
 rejected, including two actions in one object (`{ move: …, type: … }`): they
-are separate actions, played in order.
+are separate actions, played in order. A beat has only `say` and `do`: an
+action placed on the beat itself is rejected.
 
 `move`, `select` and `point` say where they act the same way, as a
 [place or a span](#places) on a line.
@@ -235,15 +365,12 @@ agent action, that is an edit like any other (and interrupts).
 ### `say`
 
 Shows the text as the current message in the narration panel. It stays current
-until the next `say`, then moves into the history. Inline code in backticks is
-rendered as code.
-
-After a `say`, playback **pauses for a reading time** proportional to the
-message length, so the programmer can read it before the actions it describes
-begin.
+until the next `say`, then moves into the history. With the voice on, it is
+spoken; with the voice off, it is read beside the code, and inline code in
+backticks is rendered as code.
 
 Keep messages short: one to three sentences. Split longer explanations across
-batches.
+beats.
 
 ### `move`
 
@@ -306,11 +433,12 @@ without moving the agent cursor, for talking about code: "this function is
 called from two places…". The highlight persists until the next `point` or
 the next editing action.
 
-**Point, then say.** During the agent's turn, the view follows the pointed
-code, switching to its `file` if needed, so the `say` right after it plays
+**Point with its say.** Give a `point` with the `say` about it, in one beat.
+During the agent's turn, the view follows the pointed
+code, switching to its `file` if needed, so the beat's `say` plays
 while the programmer is looking at it. The next action at the cursor (`move`,
 `select`, `type`, `type_fast`, `delete`) brings the view back to the cursor;
-`say` and `run` don't. If the pointed code was in another file or far from
+beats of only `say`, and `run`, don't. If the pointed code was in another file or far from
 the cursor, that return pauses like a far move before the action.
 
 During the programmer's turn, the view never switches; the narration panel
@@ -335,14 +463,45 @@ commands can still run in the background with the agent's native tools.
 - **Result.** The batch's report shows each `run`: the exit code, the last
   ~12,000 characters of output as plain text, and the terminal's shell
   (`pwsh`, `zsh`, …) so the agent can write commands for it.
+- **Read out.** With the voice on, when a batch ends on a `run` and nothing
+  is queued behind it, the extension reads its result out at once, while the
+  agent reads the report: a short output whole, a long one's line count and
+  last line, a failure's last line. The words are in the report as `said`, so
+  the agent goes on from them instead of repeating them.
 - **Failure.** A nonzero exit fails the batch with `command_failed`, since the
   rest of the batch, and the next one, were planned assuming success. A `run`
-  counts as played once its command has started, so it is never returned as
+  counts as played once its command has started, so its beat is never returned as
   unplayed; the same holds when the programmer interrupts while it runs:
   playback stops waiting, and the command keeps running.
 - The output needs shell integration in the terminal. Without it, the command
   is typed into the terminal and the entry says the output wasn't captured.
 - Not allowed during the programmer's turn.
+
+### `write`
+
+Writes lines of the current [stage](#stages) into their file, where the
+stage has them, at a human pace: a line the stage changes is edited where it
+differs, lines it takes out are selected and deleted, and lines it adds are
+typed, top to bottom. It plays with the agent cursor, like `type`, and each
+piece of it is one undo stop. `fast` types at `type_fast`'s speed.
+
+It takes the lines by their text, as the report's `stage` shows them: `{}`
+is the next **stretch** left, the lines left up to the next line the file
+keeps; `from` and `through` pick the lines a beat's words are about. A
+`through` also takes the blank lines that end its stretch right after it, so
+the next `{}` starts on code. A text that no line left contains fails with
+`not_found`, listing the lines left.
+
+A `write` counts as editing its file, so a batch with one works in that file
+only. Cut off partway, it comes back reduced to the lines it didn't finish;
+a line it left half typed is finished in place by the rest.
+
+### `drop`
+
+Takes lines out of the current stage without touching the file: lines to add
+won't be written, lines to take out stay. For what the programmer doesn't
+want, or already wrote their own way. It picks lines as `write` does, and
+takes no time.
 
 ## Places
 
@@ -367,7 +526,7 @@ type Span = {
 ```
 
 - **`file`** switches to that file, only before the batch's first edit (see
-  [`step`](#stepactions-action---report)). Without it, the action is in the
+  [`step`](#stepbeats-beat---report)). Without it, the action is in the
   cursor's file.
 - **`line`** is exact. Lines are numbered as `read` and reports show them: a
   newline at the end of a file doesn't start another line, and an empty file
@@ -427,16 +586,26 @@ lines, not as JSON strings full of escapes. It says, in order:
    - the commands it ran, with their exit code and output,
    - for a failed batch, the error, with the lines where the text it looked
      for is,
-   - **what didn't play**, verbatim, one action per line, ready to resubmit.
-     An interrupted action comes first, reduced to what it didn't do yet; a
-     failed batch's failing action comes first.
-3. **The batch this `step` submitted**, if it hasn't finished: playing or
-   queued. Or, if it was rejected, the action that would fail, the error, and
-   the code as it would read then.
-4. **The agent cursor**, only when it isn't where the agent last saw it in a
+
+- **what didn't play**, verbatim, one beat per line, ready to resubmit.
+  A beat cut short comes first, as `{ do: rest }` without its `say`, which
+  was already heard; a failed batch's failing beat comes first.
+
+3. **The stages**, for the presenter: what the author told it, each stage
+   that began since the last report, with its title and the author's notes,
+   and what's left of the current stage, whenever that changed (see
+   [Stages](#stages)).
+4. **The batch this `step` submitted**, if it hasn't finished: playing or
+   queued. Or, if it was rejected, the action of its beat that would fail, the error, and
+   the code as it would read then. If the queue had run dry and the editor sat
+   still for 5 seconds or more while the agent wrote it, how long, with a nudge
+   to keep something playing. Time spent waiting in `listen` doesn't count.
+5. **The agent cursor**, only when it isn't where the agent last saw it in a
    report, e.g. because the programmer's edits moved it.
-5. Whether the call returned because `MAX_BLOCK` elapsed, whether it's the
-   programmer's turn, and whether the session has ended.
+6. Whether the call returned because `MAX_BLOCK` elapsed, whether it's the
+   programmer's turn, and whether the session has ended. The `join` report,
+   and any report where it changed, also says whether the programmer hears
+   each `say` spoken (`voice: "on"`) or reads it (`voice: "off"`).
 
 For example, a batch interrupted by a message, and the batch queued behind it:
 
@@ -454,19 +623,20 @@ Batch 6 interrupted, in src/server.ts:
 16
 17  app.listen(3000);
     (end of file)
-Not played:
-  {"type":"tus(▌)"}
-  {"type":"201▌"}
+Not played (never typed or said: it isn't in the file, and the programmer hasn't seen or heard it):
+  {"do":[{"type":"tus(▌)"}]}
+  {"do":[{"type":"201▌"}]}
 
 Batch 7 discarded.
-Not played:
+Not played (never typed or said: it isn't in the file, and the programmer hasn't seen or heard it):
   {"say":"Now the GET route."}
 ```
 
-**What counts as played.** A `say` counts once it's shown, even if its
-reading pause is cut short. A `move` or `select` counts once the cursor has
+**What counts as played.** A beat's `say` counts once it's shown, even if the
+rest of it is cut short; that is why a beat cut short comes back without its
+`say`. A `move` or `select` counts once the cursor has
 moved. A `run` counts once its command has started. A batch interrupted
-before any of its actions had a visible effect is reported as `discarded`.
+before any of its beats had a visible effect is reported as `discarded`.
 
 **A cut-off `type`** leaves what it typed in the buffer, and comes back
 reduced to the rest, with its `▌` where it was: cut before the `▌`, it's the
@@ -475,15 +645,22 @@ finishes it exactly. Cut after the `▌`, it's `▌` and the rest after it, whic
 restores the text but leaves the cursor as many characters past the inside of
 the pair as had been typed after the `▌`; the code shows where the cursor is.
 
+For agents started from the panel, the harness rewrites the model's view of
+an interrupted `step` call back to only the beats that played, so the call
+reads as if the rest was never sent. The saved session keeps the original.
+Other agents rely on the "Not played … never typed or said" report text above.
+
 Internally, the editor produces a structured report, which the relay renders:
 
 ```ts
 type Report = {
   batches: BatchResult[]      // finished since the last report, in order
   submitted?: { id: number, status: "queued" | "playing" }  // step only, while unfinished
-  rejected?: {                // step only: the batch wasn't queued, because it would fail
-    index: number             // of the action that would fail, from 1
-    action: Action
+  rejected?: {
+    // step only: the batch wasn't queued, because it would fail
+    beat: number; // of the beat that would fail, from 1
+    action: number; // of the action in its beat that would fail, from 1
+    value: Action;
     error: BatchError
     code?: Code               // how the code would read then
   }
@@ -491,15 +668,25 @@ type Report = {
   turn: "agent" | "user"
   cursor?: Code               // only when it isn't where the agent last saw it
   waiting?: true              // returned due to MAX_BLOCK
+  paused?: true; // playback is paused in the editor: batches are held until the programmer resumes
+  stillMs?: number; // step only: the editor sat still this long, the queue dry, before this batch came
+  confirming?: { id: number; command: string }; // a `run` waiting for the programmer to allow it
+  voice?: "on" | "off"; // in the `join` report, and any report where it changed
+  mode?: "build" | "learn"; // the session's pairing mode; in the `join` report only
+  drive?: "show" | "together" | "try"; // with mode `learn`: who does the work
+  briefs?: { number: number; title: string; notes: string }[]; // stages that began since the last report
+  stage?: StageView; // the current stage, as the queued batches leave it, whenever it changed
+  author?: string[]; // what the author told the presenter since the last report
 }
 
 type BatchResult = {
   id: number
   status: "completed" | "interrupted" | "failed" | "discarded"
   code?: Code
-  error?: BatchError          // for a command's failure, about its `run`; else the first unplayed action
-  unplayed?: Action[]
-  runs?: {                    // one per `run` that started
+  error?: BatchError; // for a command's failure, about its `run`; else the first unplayed beat's action
+  unplayed?: Beat[];
+  runs?: {
+    // one per `run` that started
     command: string
     exit_code?: number        // absent while running, or if it couldn't be observed
     output: string            // plain text, the tail if long
@@ -563,7 +750,10 @@ edits near the agent cursor, may come later.)
   theirs. A change by others to a file the playing or queued batches edit
   interrupts, since they were planned against the text before it: a
   formatter when a batch saves, say. Changes by others to any other file
-  don't interrupt, and don't make `listen` return.
+  don't interrupt, and don't make `listen` return. Another extension's
+  answer to the agent's typing, like closing a `"""` the instant it's opened
+  or formatting a line as it's typed, isn't an edit at all: the extension
+  takes it back at once, so the file holds only what the agent typed.
 - `end`: the programmer ended the session. Playback stops and the session is
   over: this is its final report, and further calls fail with `no_session`.
 
@@ -578,7 +768,7 @@ The agent receives `{ kind: "turn", to: "user" }`.
 
 **During the programmer's turn**, the agent is the navigator:
 
-- It may only `say` and `point`. Any other action fails with `not_your_turn`.
+- Its beats may only talk and `point`. Any other action fails with `not_your_turn`.
 - It calls `listen` to follow along. `listen` returns on a message, on the turn
   change back, or when the programmer has made edits and then paused typing
   for a few seconds (*tunable*), so the agent can comment as a navigator
@@ -587,6 +777,115 @@ The agent receives `{ kind: "turn", to: "user" }`.
 **Programmer hands the turn back** ("Your turn" button, optionally with a
 message). The agent receives the programmer's edits since the last report and
 `{ kind: "turn", to: "agent", message? }`.
+
+## Stages
+
+The author works ahead, out of sight; the presenter plays its work. Neither
+waits on the other, and the programmer never waits on the author's thinking,
+only on playback.
+
+**Recording.** `stage` snapshots the author's copy, through an index of its
+own beside the copy, so the copy's git state stays the author's, and records
+what changed since the stage before, file by file. Stages play in order, one
+at a time. The next begins once all of the current one is in the editor,
+written or dropped; the presenter hears it in its next report as a brief:
+its number, title and the author's notes. A file the stage adds is created
+as its lines are written, and one it deletes is deleted once its lines are
+out. Binary files can't be typed: they're put in place as their stage
+begins.
+
+**What's left.** A report's `stage` shows the current stage as the queued
+batches leave the code, whenever that changed: in each file, the lines still
+to write (`+`) and to take out (`-`), among the lines around them as they
+read. Lines in the file have their number; lines still to write have none,
+and go before the next line.
+
+```
+Stage 1 of 1, the last: A subtract function. What's left of it, as your queued batches leave the code: `+` lines to write, `-` lines to take out, with the lines around them as they read.
+
+calc.py:
+4
+  + def subtract(a, b):
+  +     return a - b
+  +
+  +
+5   print(add(2, 3))
+  + print(subtract(5, 3))
+```
+
+```ts
+type StageView = {
+  number: number;
+  title: string;
+  of: number; // how many stages the author has recorded so far
+  last?: true; // the author recorded its last stage: no more are coming
+  left: StageFile[]; // none once the stage's code is all in
+  set_aside?: SetAside[]; // with the first report after it happened
+};
+
+type StageFile = {
+  file: string;
+  lines: { number?: number; text: string; change?: "write" | "remove" }[];
+  more?: number; // how many more lines are left, after the ones shown
+  delete?: true; // the stage deletes the file, once its lines are out
+};
+
+type SetAside = { file: string; stage: number; plan: string; kept: string };
+```
+
+**The programmer's edits stand.** What's left is tracked by the lines'
+identities, not their numbers, so it stays right while anyone edits, and an
+edit by the programmer is theirs, never drift to undo:
+
+- a line of the stage they type themselves counts as written; one still to
+  write that they delete is dropped; one due to go that they changed stays;
+  lines they add are theirs and stay.
+- Where a stage changes code the programmer has already changed their own
+  way, their version is kept and the stage's is **set aside**: the
+  presenter (in `stage.set_aside`) and the author (a `set_aside` event) hear
+  both versions.
+- Edits in the editor that aren't a stage's code, the programmer's or the
+  presenter's own, are **carried** into the author's copy, merged with its
+  own changes, and the author hears of them once the typing pauses: an
+  `edit` event, with `carried: false` where they collided with the author's
+  changes and stayed out of the copy.
+
+**The author's news.** `start`, `stage`, `wait` and `tell_presenter` return
+an author report:
+
+```ts
+type AuthorReport = {
+  copy?: string; // with `start`: the author's private copy
+  recorded?: number; // with `stage`: the stage it recorded
+  playing: number; // the stage being played, 0 before the first
+  stages: number; // how many are recorded
+  events: AuthorEvent[];
+  mode?: "build" | "learn"; // with `start`
+  drive?: "show" | "together" | "try";
+  ended?: true;
+};
+
+type AuthorEvent =
+  | { kind: "edit"; file: string; diff: string; by: "programmer" | "presenter"; carried: boolean }
+  | { kind: "told"; text: string } // from the presenter's `tell_author`
+  | ({ kind: "set_aside" } & SetAside)
+  | { kind: "caught_up"; stage: number; last?: true }
+  | { kind: "presenter"; present: boolean }
+  | { kind: "end"; summary?: string };
+```
+
+- `caught_up`: the editor has all of the recorded stages, so the programmer
+  waits on the next. With `last`, it was the last stage, and the presenter
+  is wrapping up: the author records more only if there's more to do.
+- `presenter`: a presenter joined, or its connection closed. The session
+  goes on without one: the author starts a new presenter, or joins and
+  presents the rest itself.
+
+**The compare view.** When the session ends, the extension keeps the
+prepared version, each file as the author's last stage left it, and the
+panel offers to compare it with the code as the session left it: what the
+programmer and the presenter changed on the way. The copy itself is
+removed.
 
 ## Files, saving, and native tools
 
@@ -614,11 +913,13 @@ message). The agent receives the programmer's edits since the last report and
   them instead: `say` what it's about to run and why, and `say` what came out
   of it afterwards.
 
-## Guidance for the agent
+## Guidance for the agents
 
-How the agent should use this protocol to give the programmer a good
-experience (order of work, narration, background vs. visible work) is in
-[AGENT_GUIDE.md](AGENT_GUIDE.md), which `start` returns to the agent.
+How the agents should use this protocol to give the programmer a good
+experience is in two guides: [AUTHOR_GUIDE.md](AUTHOR_GUIDE.md), which `start`
+returns (getting the presenter going, cutting the work into stages, notes),
+and [PRESENTER_GUIDE.md](PRESENTER_GUIDE.md), which `join` returns (order of
+work, narration, background vs. visible work, the programmer's requests).
 
 ## Examples
 
@@ -626,15 +927,15 @@ experience (order of work, narration, background vs. visible work) is in
 
 ```
 → step
-[{ "say": "Let's add the POST handler. Signature first." },
+[{"say":"Let's add the POST handler. Signature first.","do":[
  { "move": { "file": "src/server.ts", "line": 4, "at": "app.use(express.json());▌" } },
- { "type": "\n\napp.post('/todos', async (req, res) => {\n▌\n});" }]
+ { "type": "\n\napp.post('/todos', async (req, res) => {\n▌\n});" }]}]
 ← returns immediately
 Batch 1 is playing.
 
 → step (blocks until batch 1 finishes)
-[{ "say": "We need a title from the body." },
- { "type": "  const title = req.body.title;▌" }]
+[{"say":"We need a title from the body.","do":[
+ { "type": "  const title = req.body.title;▌" }]}]
 ←
 Batch 1 completed, in src/server.ts:
  1  import express from 'express';
@@ -663,28 +964,28 @@ The programmer said:
 
 Batch 2 interrupted, in src/server.ts:
 7    const ti▌
-Not played:
-  {"type":"tle = req.body.title;▌"}
+Not played (never typed or said: it isn't in the file, and the programmer hasn't seen or heard it):
+  {"do":[{"type":"tle = req.body.title;▌"}]}
 
 Batch 3 discarded.
-Not played:
+Not played (never typed or said: it isn't in the file, and the programmer hasn't seen or heard it):
   {"say":"..."}
-  {"type":"...▌"}
+  {"do":[{"type":"...▌"}]}
 
 → step
-[{ "select": { "text": "  const ti" } },
- { "say": "Good call. Let me define a schema instead." },
- { "delete": true }, ...]
+[{"say":"Good call. Let me define a schema instead.","do":[
+ { "select": { "text": "  const ti" } },
+ { "delete": true }]}, ...]
 ```
 
 ### A spot on the wrong line
 
 ```
 → step
-[{ "say": "Now the response." },
- { "move": { "line": 30, "at": "  return res.json(▌" } }, ...]
+[{"say":"Now the response.","do":[
+ { "move": { "line": 30, "at": "  return res.json(▌" } }]}, ...]
 ← returns immediately
-Your batch was rejected: its action 2 would fail:
+Your batch was rejected: action 1 of beat 1 would fail:
   {"move":{"line":30,"at":"  return res.json(▌"}}
 not_found: The spot isn't on line 30: line 30 reads "  const todo = findTodo(id);". It's on these lines:
   line 12: return res.json(todos);
@@ -708,8 +1009,8 @@ Programmer presses "My turn".
   ...
 → read src/server.ts, from line 20: the loop is on line 21
 → step
-[{ "point": { "line": 21, "text": "for (let i = 0; i <= todos.length; i++)" } },
- { "say": "Careful: `<=` will go one past the end." }]
+[{"do":[{ "point": { "line": 21, "text": "for (let i = 0; i <= todos.length; i++)" } }],
+ "say":"Careful: `<=` will go one past the end."}]
 → listen
 ... programmer fixes it, presses "Your turn" ...
 ← The programmer edited src/server.ts:

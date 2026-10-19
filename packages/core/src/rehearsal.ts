@@ -2,18 +2,22 @@
 // its line, say) is reported at once, instead of when the batch plays, minutes later. It's the same
 // player as real playback, on a stage that plays in a copy of the editor, instantly and silently.
 
-import type { Action, BatchResult } from "@ai-pair/protocol"
+import type { BatchResult, Beat } from "@ai-pair/protocol"
 import type { Config } from "./controller"
 import type { LineIds, Sighting } from "./lines"
+import type { StagePlan } from "./plan"
 import { Player, transformScene, type Scene } from "./player"
 import type { Change, CommandOutcome, EditorPort, PanelPort } from "./ports"
 import { instant } from "./timeline"
 
-/** What playing batches leaves behind: the scene, the text of each file they edited, and its lines. `edits`: this batch's own. */
-export type Rehearsal = { scene: Scene; texts: Map<string, string>; lines: LineIds; edits: Set<string> }
+/**
+ * What playing batches leaves behind: the scene, the text of each file they edited, the files they
+ * deleted, its lines, and the stage's plan. `edits`: this batch's own.
+ */
+export type Rehearsal = { scene: Scene; texts: Map<string, string>; gone: Set<string>; lines: LineIds; plan?: StagePlan; edits: Set<string> }
 
 /**
- * Plays `actions` in memory, starting from `from`. Commands don't run, and succeed; a `move` goes
+ * Plays `beats` in memory, starting from `from`. Commands don't run, and succeed; a `move` goes
  * only to a line the agent `knows`. Returns the batch's result, the lines it shows, and what it
  * leaves behind, for rehearsing the batch after it.
  */
@@ -21,7 +25,7 @@ export async function rehearse(
   editor: EditorPort,
   config: Config,
   from: Rehearsal,
-  actions: Action[],
+  beats: Beat[],
   knows: (file: string, line: number, id: number) => boolean,
 ): Promise<{ result: BatchResult; sightings: Sighting[]; after: Rehearsal }> {
   const scene: Scene = {
@@ -30,8 +34,9 @@ export async function rehearse(
     selection: from.scene.selection && { ...from.scene.selection },
     point: from.scene.point && { ...from.scene.point },
   }
-  const memory = new MemoryEditor(editor, new Map(from.texts))
+  const memory = new MemoryEditor(editor, new Map(from.texts), new Set(from.gone))
   const lines = from.lines.fork()
+  const plan = from.plan?.clone()
   const player = new Player(scene, {
     editor: memory,
     panel: silent,
@@ -42,9 +47,10 @@ export async function rehearse(
     confirm: () => Promise.resolve(true),
     lines,
     knows,
+    plan: () => plan,
   })
-  const { result, sightings } = await player.play(0, actions)
-  return { result, sightings, after: { scene, texts: memory.texts, lines, edits: memory.edits } }
+  const { result, sightings } = await player.play(0, beats)
+  return { result, sightings, after: { scene, texts: memory.texts, gone: memory.gone, lines, plan, edits: memory.edits } }
 }
 
 /** Follows a change by others to a file no queued batch edits, so its rehearsed text is the editor's. */
@@ -66,6 +72,8 @@ class MemoryEditor implements EditorPort {
   constructor(
     private readonly real: EditorPort,
     readonly texts: Map<string, string>,
+    /** Deleted here, and not made again since. */
+    readonly gone: Set<string>,
   ) {}
 
   resolvePath(file: string): string {
@@ -77,6 +85,7 @@ class MemoryEditor implements EditorPort {
   }
 
   async getText(file: string): Promise<string> {
+    if (this.gone.has(file)) throw new Error(`${file} was deleted.`)
     return this.texts.get(file) ?? (await this.real.getText(file))
   }
 
@@ -95,6 +104,10 @@ class MemoryEditor implements EditorPort {
 
   async show(file: string): Promise<void> {
     if (this.texts.has(file)) return
+    if (this.gone.delete(file)) {
+      this.texts.set(file, "")
+      return
+    }
     try {
       await this.real.getText(file)
     } catch {
@@ -106,6 +119,12 @@ class MemoryEditor implements EditorPort {
   async edit(file: string, offset: number, deleteLength: number, text: string): Promise<void> {
     const old = await this.getText(file)
     this.texts.set(file, old.slice(0, offset) + text + old.slice(offset + deleteLength))
+    this.edits.add(file)
+  }
+
+  async deleteFile(file: string): Promise<void> {
+    this.texts.delete(file)
+    this.gone.add(file)
     this.edits.add(file)
   }
 
