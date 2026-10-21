@@ -1,9 +1,11 @@
 import * as nodePath from "node:path"
 import { vi } from "vitest"
 import { Controller, defaultConfig, type Config } from "../src/controller"
+import { merge3 } from "../src/merge"
 import type {
   AgentState,
   CommandOutcome,
+  CopyPort,
   CursorView,
   EditOptions,
   EditorPort,
@@ -11,6 +13,8 @@ import type {
   PanelEvent,
   PanelPort,
   RunOptions,
+  StageChange,
+  VoicePort,
 } from "../src/ports"
 
 /** `/project` in this platform's form (`C:\project` on Windows), as the controller resolves it. */
@@ -60,6 +64,12 @@ export class FakeEditor implements EditorPort {
   async save(file: string): Promise<void> {
     this.dirty.delete(file)
     this.saved.push(file)
+  }
+  deleted: string[] = []
+  async deleteFile(file: string): Promise<void> {
+    this.files.delete(file)
+    this.dirty.delete(file)
+    this.deleted.push(file)
   }
   focus: Focus = "cursor"
   renderCursor(cursor: CursorView | null, state: AgentState, focus: Focus): void {
@@ -137,6 +147,65 @@ export class FakeEditor implements EditorPort {
   }
 }
 
+/**
+ * The author's copy, in memory: tests write the author's work into `files`, by workspace path, and
+ * then record a stage. Snapshots are numbered.
+ */
+export class FakeCopy implements CopyPort {
+  readonly root = nodePath.resolve("/copy")
+  readonly base: string
+  files: Map<string, string>
+  private snapshots: Map<string, string>[] = []
+  carried: Array<{ file: string; before: string; after: string }> = []
+  disposed = false
+
+  constructor(files: ReadonlyMap<string, string>) {
+    this.files = new Map(files)
+    this.base = this.take()
+  }
+
+  private take(): string {
+    this.snapshots.push(new Map(this.files))
+    return String(this.snapshots.length - 1)
+  }
+
+  /** The author writes a file of its copy, named as in the workspace. */
+  write(name: string, text: string | undefined): void {
+    const file = nodePath.resolve(ROOT, name)
+    if (text === undefined) this.files.delete(file)
+    else this.files.set(file, text)
+  }
+
+  async snapshot(): Promise<string> {
+    return this.take()
+  }
+
+  async changes(from: string, to: string): Promise<StageChange[]> {
+    const a = this.snapshots[Number(from)]!
+    const b = this.snapshots[Number(to)]!
+    const changes: StageChange[] = []
+    for (const file of new Set([...a.keys(), ...b.keys()])) {
+      if (a.get(file) !== b.get(file)) changes.push({ file, before: a.get(file), after: b.get(file) })
+    }
+    return changes
+  }
+
+  async restore(): Promise<void> {}
+
+  async carry(file: string, before: string, after: string): Promise<boolean> {
+    this.carried.push({ file, before, after })
+    const now = this.files.get(file)
+    if (now === undefined) return false
+    const merged = merge3(before, now, after, "ours")
+    this.files.set(file, merged.text)
+    return merged.conflicts.length === 0
+  }
+
+  async dispose(): Promise<void> {
+    this.disposed = true
+  }
+}
+
 export class FakePanel implements PanelPort {
   events: PanelEvent[] = []
   post(event: PanelEvent): void {
@@ -147,6 +216,51 @@ export class FakePanel implements PanelPort {
   }
 }
 
+/**
+ * A voice whose words take as long as the test says: `finish` ends whatever it is saying. Its words
+ * are heard at once, unless `slowStart` is set: then only when `start` says so.
+ */
+export class FakeVoice implements VoicePort {
+  ready = true
+  enabled = true
+  slowStart = false
+  spoken: string[] = []
+  spans: Array<number | undefined> = []
+  /** Words whose `speak` was taken back with its signal. */
+  takenBack: string[] = []
+  stops = 0
+  private finishers: Array<() => void> = []
+  private starters: Array<() => void> = []
+
+  speak(text: string, spanMs?: number, onStart?: () => void, signal?: AbortSignal): Promise<void> {
+    this.spoken.push(text)
+    this.spans.push(spanMs)
+    if (onStart) {
+      if (this.slowStart) this.starters.push(onStart)
+      else onStart()
+    }
+    return new Promise<void>((resolve) => {
+      this.finishers.push(resolve)
+      signal?.addEventListener("abort", () => (this.takenBack.push(text), resolve()), { once: true })
+    })
+  }
+  start(): void {
+    for (const start of this.starters.splice(0)) start()
+  }
+  prepared: string[] = []
+  prepare(text: string): void {
+    this.prepared.push(text)
+  }
+  finish(): void {
+    for (const finish of this.finishers.splice(0)) finish()
+  }
+  stop(): void {
+    this.stops++
+    this.start()
+    this.finish()
+  }
+}
+
 /** Deterministic timing: no jitter, round numbers, no pauses except before moves and selections. */
 export const testConfig: Config = {
   ...defaultConfig,
@@ -154,6 +268,7 @@ export const testConfig: Config = {
     type: { charMs: 100, jitter: 0.25, wordStartMs: 0, punctuationMs: 0, openBracketMs: 0, newlineMs: 0 },
     fastFactor: 0.1,
     reading: { msPerWord: 100, minMs: 500, maxMs: 2000 },
+    voice: { leadMs: 10, maxStartMs: 5000, maxLeadMs: 5000, msPerWord: 100 },
     beforeMoveMs: 100,
     afterMoveNearMs: 0,
     afterMoveFarMs: 0,
@@ -164,6 +279,8 @@ export const testConfig: Config = {
     afterPointMs: 0,
   },
   navigatorIdleMs: 1000,
+  // One batch at a time, as most tests expect; working ahead has tests of its own.
+  workAheadBatches: 0,
   random: () => 0.5,
 }
 
@@ -171,9 +288,11 @@ export function setup(files: Record<string, string> = {}, config: Partial<Config
   const editor = new FakeEditor()
   const panel = new FakePanel()
   for (const [name, text] of Object.entries(files)) editor.files.set(editor.resolvePath(name), text)
-  const controller = new Controller(editor, panel, { ...testConfig, ...config })
+  // The copy the last session's author works in, made from the editor's files as they are then.
+  const copies: { last?: FakeCopy } = {}
+  const controller = new Controller(editor, panel, async () => (copies.last = new FakeCopy(editor.files)), { ...testConfig, ...config })
   editor.controller = controller
-  return { editor, panel, controller }
+  return { editor, panel, controller, copy: () => copies.last! }
 }
 
 /** Tracks a promise so tests can check whether it has settled yet. */

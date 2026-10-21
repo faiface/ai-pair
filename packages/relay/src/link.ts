@@ -86,8 +86,16 @@ type Pending = {
 /** A port a stale window file points at may now belong to something that never answers. */
 const HANDSHAKE_MS = 5000
 
-/** Tools whose results are reports, which must be delivered exactly once. */
-const REPORTING: ReadonlySet<ToolName> = new Set(["step", "listen", "end"])
+/** Tools whose results are reports, which must be delivered exactly once: the presenter's, or the author's. */
+const REPORTING: Partial<Record<ToolName, "report" | "author">> = {
+  join: "report",
+  step: "report",
+  listen: "report",
+  end: "report",
+  stage: "author",
+  wait: "author",
+  tell_presenter: "author",
+}
 
 /** A lazily (re)connected link to the editor window for the agent's folder, `cwd` until `locate` says otherwise. */
 export class EditorLink {
@@ -113,6 +121,11 @@ export class EditorLink {
       this.ws = null
     }
     return folder
+  }
+
+  /** Whether the link is open: a presenter that shares the author's relay stays on its window. */
+  get connected(): boolean {
+    return this.ws?.readyState === WebSocket.OPEN
   }
 
   async call(tool: ToolName, args: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
@@ -185,7 +198,9 @@ export class EditorLink {
           const p = settle(m.id)
           // The call returned before our cancellation reached the editor, so the agent will never
           // see this report. Hand it back to be delivered with the next one.
-          if (p?.cancelled && REPORTING.has(p.tool)) ws.send(JSON.stringify({ type: "return", report: m.result }))
+          const kind = p?.cancelled ? REPORTING[p.tool] : undefined
+          if (kind === "report") ws.send(JSON.stringify({ type: "return", report: m.result }))
+          if (kind === "author") ws.send(JSON.stringify({ type: "return", author: m.result }))
           p?.resolve(m.result)
         } else if (m.type === "error") {
           settle(m.id)?.reject(new RelayError(m.code, m.message))

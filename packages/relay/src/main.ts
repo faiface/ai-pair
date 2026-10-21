@@ -2,13 +2,15 @@
 
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { discoveryDir } from "@ai-pair/protocol"
-import guideMarkdown from "../../../AGENT_GUIDE.md"
+import authorMarkdown from "../../../AUTHOR_GUIDE.md"
+import presenterMarkdown from "../../../PRESENTER_GUIDE.md"
 import { EditorLink } from "./link"
-import { agentGuide, createServer } from "./server"
+import { createServer, guideBody } from "./server"
 
 async function main(): Promise<void> {
   const cwd = process.cwd()
-  const server = createServer(new EditorLink(cwd, discoveryDir()), agentGuide(guideMarkdown), cwd)
+  const guides = { author: guideBody(authorMarkdown), presenter: guideBody(presenterMarkdown) }
+  const server = createServer(new EditorLink(cwd, discoveryDir()), guides, cwd)
   await server.connect(new StdioServerTransport())
 }
 

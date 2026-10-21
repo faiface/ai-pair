@@ -3,9 +3,9 @@
 
 import * as os from "node:os"
 import * as path from "node:path"
-import type { Report, ToolErrorCode } from "./index"
+import type { AuthorReport, Report, ToolErrorCode } from "./index"
 
-export const PROTOCOL_VERSION = 3
+export const PROTOCOL_VERSION = 5
 
 /** Written by each editor window to `<discoveryDir>/<pid>.json`. */
 export type Discovery = {
@@ -26,7 +26,11 @@ export function discoveryDir(): string {
   return path.join(aiPairHome(), "windows")
 }
 
-export type ToolName = "start" | "step" | "listen" | "end" | "read"
+/** The author's tools: it works in a private copy and records stages. */
+export type AuthorTool = "start" | "stage" | "wait" | "tell_presenter"
+/** The presenter's tools: it plays the author's stages in the programmer's editor. */
+export type PresenterTool = "join" | "step" | "listen" | "read" | "tell_author"
+export type ToolName = AuthorTool | PresenterTool | "end"
 
 export type RelayMessage =
   | { type: "hello"; token: string; protocolVersion: number }
@@ -34,6 +38,7 @@ export type RelayMessage =
   | { type: "cancel"; id: number }
   /** A report that arrived for a call the agent had already cancelled: deliver it again. */
   | { type: "return"; report: Report }
+  | { type: "return"; author: AuthorReport }
 
 export type EditorMessage =
   | { type: "welcome" }

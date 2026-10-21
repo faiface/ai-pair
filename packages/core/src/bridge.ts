@@ -8,7 +8,7 @@ import { WebSocketServer, type WebSocket } from "ws"
 import {
   PROTOCOL_VERSION,
   ToolError,
-  type Action,
+  type Beat,
   type Discovery,
   type EditorMessage,
   type RelayMessage,
@@ -27,8 +27,10 @@ export class Bridge {
   private readonly token = randomBytes(24).toString("hex")
   private port = 0
   private lastFocused = Date.now()
-  /** The relay connection whose agent started the current (or last) session. */
+  /** The relay connection whose agent, the author, started the current (or last) session. */
   private owner: WebSocket | null = null
+  /** Other connections that joined the session to present it, like the author's subagent. */
+  private readonly presenters = new Set<WebSocket>()
 
   constructor(
     private readonly controller: Controller,
@@ -117,7 +119,9 @@ export class Bridge {
       if (m.type === "cancel") {
         calls.get(m.id)?.abort()
       } else if (m.type === "return") {
-        if (this.owner === ws) this.controller.restore(m.report)
+        if ("author" in m) {
+          if (this.owner === ws) this.controller.restoreAuthor(m.author)
+        } else if (this.presenters.has(ws) || this.owner === ws) this.controller.restore(m.report)
       } else if (m.type === "call") {
         const abort = new AbortController()
         calls.set(m.id, abort)
@@ -140,7 +144,10 @@ export class Bridge {
       for (const abort of calls.values()) abort.abort()
       if (this.owner === ws) {
         this.owner = null
+        this.presenters.clear()
         this.controller.disconnect()
+      } else if (this.presenters.delete(ws)) {
+        this.controller.presenterLeft()
       }
     })
   }
@@ -151,20 +158,49 @@ export class Bridge {
       if (c.isActive && this.owner !== ws) {
         throw new ToolError("session_active", "Another agent is already pairing in this editor window.")
       }
-      const report = await c.start(optionalString(args.task), optionalString(args.cwd))
+      const report = await c.start(optionalString(args.task), optionalString(args.cwd), signal)
       this.owner = ws
+      this.presenters.clear()
       return report
     }
-    if (this.owner !== ws) {
-      throw new ToolError("no_session", "No pairing session is active. Call `start` to begin one.")
+    // The author's own calls come over the connection that started the session; the presenter's
+    // over any, as a subagent may connect anew. An agent without subagents presents on its own.
+    const author = this.owner === ws
+    if (tool === "join") {
+      if (!c.isActive) throw new ToolError("no_session", "No pairing session is active: the author starts one with `start`.")
+      if (!author) this.presenters.add(ws)
+      return c.join(signal)
+    }
+    if (!author && !this.presenters.has(ws)) {
+      throw new ToolError("no_session", "Not in a pairing session: the author calls `start`, the presenter `join`.")
+    }
+    if (!author && (tool === "stage" || tool === "wait" || tool === "tell_presenter")) {
+      throw new ToolError("invalid_arguments", `\`${tool}\` is the author's: the agent that called \`start\`.`)
     }
     switch (tool) {
+      case "stage":
+        if (typeof args.title !== "string") throw new ToolError("invalid_arguments", "`title` must be a string.")
+        return c.stage(args.title, optionalString(args.notes) ?? "", args.last === true, signal)
+      case "wait":
+        return c.wait(signal)
+      case "tell_presenter":
+        if (typeof args.text !== "string") throw new ToolError("invalid_arguments", "`text` must be a string.")
+        return c.tellPresenter(args.text, signal)
+      case "tell_author":
+        if (typeof args.text !== "string") throw new ToolError("invalid_arguments", "`text` must be a string.")
+        c.tellAuthor(args.text)
+        return { told: true }
       case "step":
-        if (!Array.isArray(args.actions)) throw new ToolError("invalid_arguments", "`actions` must be an array.")
-        return c.step(args.actions as Action[], signal)
+        if (!Array.isArray(args.beats)) throw new ToolError("invalid_arguments", "`beats` must be an array.")
+        return c.step(args.beats as Beat[], signal)
       case "listen":
         return c.listen(signal)
       case "end":
+        // The presenter ends the session once it has played the last stage: an author's `end`
+        // would cut it off, and wait behind its calls.
+        if (author && this.presenters.size > 0) {
+          throw new ToolError("invalid_arguments", "The presenter ends the session once it has played the stage marked `last`.")
+        }
         return c.end(optionalString(args.summary), signal)
       case "read":
         if (typeof args.file !== "string") throw new ToolError("invalid_arguments", "`file` must be a string.")

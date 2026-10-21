@@ -32,6 +32,17 @@ export function lineText(text: string, line: number): string {
   return splitLines(text)[line - 1] ?? ""
 }
 
+/** The offset of the start of a line, clamped to the document. */
+export function lineStart(text: string, line: number): number {
+  let offset = 0
+  for (let l = 1; l < line; l++) {
+    const next = text.indexOf("\n", offset)
+    if (next === -1) return text.length
+    offset = next + 1
+  }
+  return offset
+}
+
 /** The offset of the end of a line (before its newline), clamped to the document. */
 export function lineEnd(text: string, line: number): number {
   let offset = 0
